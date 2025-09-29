@@ -7,6 +7,7 @@ import torch
 dataset = load_dataset("HuggingFaceTB/smoltalk", 'all')
 # %%
 device = "cuda" if torch.cuda.is_available() else "mps"
+print(device)
 # %%
 from transformers import AutoModelForCausalLM, AutoTokenizer
 # Configure model and tokenizer
