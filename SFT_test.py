@@ -2,6 +2,8 @@
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
 import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 #%%
 
 dataset = load_dataset("HuggingFaceTB/smoltalk", 'all')
@@ -9,23 +11,9 @@ dataset = load_dataset("HuggingFaceTB/smoltalk", 'all')
 device = "cuda" if torch.cuda.is_available() else "mps"
 print(device)
 # %%
-from transformers import AutoModelForCausalLM, AutoTokenizer
-# Configure model and tokenizer
-model_name = "HuggingFaceTB/SmolLM2-135M"
-model = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path=model_name).to(
-    device
-)
-tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=model_name)
-# Setup chat template
-model, tokenizer = setup_chat_format(model=model, tokenizer=tokenizer)
 
-# %%
-chat = [
-  {"role": "user", "content": "Hello, how are you?"},
-  {"role": "assistant", "content": "I'm doing great. How can I help you today?"},
-  {"role": "user", "content": "I'd like to show off how chat templating works!"},
-]
-tokenizer.apply_chat_template(chat, tokenize=False)
+# Configure model and tokenizer
+
 # %%
 from datasets import Dataset
 tokenizer = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta")
@@ -42,48 +30,26 @@ chat2 = [
 dataset = Dataset.from_dict({"chat": [chat1, chat2]})
 dataset = dataset.map(lambda x: {"formatted_chat": tokenizer.apply_chat_template(x["chat"], tokenize=False, add_generation_prompt=False)})
 print(dataset['formatted_chat'][0])
+
 # %%
-from datasets import load_dataset
-from trl import SFTConfig, SFTTrainer
-import torch
+# These will use different templates automatically
+# mistral_tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.1")
+# qwen_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen-7B-Chat")
+smol_tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct")
 
-# Set device
-device = "cuda" if torch.cuda.is_available() else "cpu"
+messages = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello!"},
+    {"role": "assistant", "content": "How can I help you"}
+]
 
-# Load dataset
-dataset = load_dataset("HuggingFaceTB/smoltalk", "all")
+# Each will format according to its model's template
+# mistral_chat = mistral_tokenizer.apply_chat_template(messages, tokenize=False)
+# qwen_chat = qwen_tokenizer.apply_chat_template(messages, tokenize=False)
+smol_chat = smol_tokenizer.apply_chat_template(messages, tokenize=False)
 
-# Configure model and tokenizer
-model_name = "HuggingFaceTB/SmolLM2-135M"
-model = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path=model_name).to(
-    device
-)
-tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=model_name)
-# Setup chat template
-model, tokenizer = setup_chat_format(model=model, tokenizer=tokenizer)
+print(smol_chat)
 
-# Configure trainer
-training_args = SFTConfig(
-    output_dir="./sft_output",
-    max_steps=1000,
-    per_device_train_batch_size=4,
-    learning_rate=5e-5,
-    logging_steps=10,
-    save_steps=100,
-    eval_strategy="steps",
-    eval_steps=50,
-)
 
-# Initialize trainer
-trainer = SFTTrainer(
-    model=model,
-    args=training_args,
-    train_dataset=dataset["train"],
-    eval_dataset=dataset["test"],
-    processing_class=tokenizer,
-)
-
-# Start training
-trainer.train()
 
 # %%
