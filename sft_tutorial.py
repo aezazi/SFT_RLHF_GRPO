@@ -108,7 +108,11 @@ print(type(dataset_ultrachat["train_sft"][0:2]['messages']))
 print(dataset_ultrachat["train_sft"][0:2]['messages'])
 print(type(dataset_ultrachat["train_sft"].select(range(0,3))['messages']))
 print(len(dataset_ultrachat["train_sft"].select(range(0,3))['messages']))
-print(dataset_ultrachat.column_names)
+
+# the column_names attribute is very useful for determing the columns in each Dataset object
+
+print(f"\nThe column names in each Dataset object:\n{dataset_ultrachat.column_names}\n")
+print(f"The column names in the train_sft Dataset object:\n{dataset_ultrachat['train_sft'].column_names}")
 
 # %%
 import pprint
@@ -147,32 +151,47 @@ print(f'type of example_select: {type(example_select)} \nexample_select features
 example_select_messages = dataset_ultrachat['train_sft'].select(range(0,3))['messages']
 print(f'type of example_select_messages: {type(example_select_messages)}\n')
 
+# Here I just check that the first item in the list of lists created by slicing is the same as the first item in the Column container object created by using the .select() method
 example_select_messages[0] == example_slice_messages[0]
 
 #%%
-# this is the first and second turn
-print(f'example_msg {ex_num} turn 0 type: {type(example_message[0])}   keys: {example_message[0].keys()}\n {example_message[0]} \n')
+# examine the messages. Each item in the column returned by example_select_messages is a converasttion with one or more turns. Each turn is a regular python dictionary with keys "role" and "content"
+example_message = example_select_messages[0]
+print(f'number of turns in example_message: {len(example_message)}\n')
 
-print(f'example_msg {ex_num} turn 1 type: {type(example_message[1])}   keys: {example_message[1].keys()}\n {example_message[0]} \n')
+# this is the first and second turn
+print(f'example_msg {0} turn 0 type: {type(example_message[0])}   keys: {example_message[0].keys()}  length: {len(example_message[0])}\n {example_message[0]} \n')
+
+print(f'example_msg {1} turn 1 type: {type(example_message[1])}   keys: {example_message[1].keys()}\n {example_message[0]} \n')
 
 # %%
-for example in dataset_ultrachat['train_sft']:
+# take a look at the number of turns in the first 10 conversations
+for example in dataset_ultrachat['train_sft'].select(range(0,10)):
     messages = example['messages']
     print(f'turns in this conversation: {len(messages)}')
 
 
 #%%
-# Claude generated code. The HuggingFaceH4/ultrachat_200k dataset  does not include a "system" role. the code below inserts a system role at the begining of each example. As best as I could determine, models like GPT, Claude etc. use a very simple, fixed system message (if at all) during base SFT training.  System message flexibility is added later through RLHF/post-training
+"""
+ The HuggingFaceH4/ultrachat_200k dataset  does not include a "system" role. the code below inserts a system role at the begining of each example. As best as I could determine, models like GPT, Claude etc. use a very simple, fixed system message (if at all) during base SFT training.  System message flexibility is added later through RLHF/post-training. I used Claude ot generate some of this code.
+ """
 
-
+# this function checks, for each example, if the messages' first turn in the conversation includes a "system" role. If not, it creates a turn with a "system" role and content and prepends it the converstation
 def add_system_message(example):
-    messages = example['messages']
+    """ 
+    args: example. one example (row) from the train_sft split
+    """
+    messages = example['messages'] # extract the messages column from train_sft split
+    
     if messages[0]['role'] != 'system':
         system_msg = {"role": "system", "content": "You are a helpful assistant."}
         messages = [system_msg] + messages
+    
     return {'messages': messages}
 
 dataset_ultrachat_with_sys_role = dataset_ultrachat['train_sft'].map(add_system_message)
+
+#%%
 print("Original first example:")
 print(dataset_ultrachat['train_sft']['messages'][0])  
 
@@ -210,9 +229,66 @@ print(tokenizer.pad_token_id)
 
 
 #%%
-# add special tokens to tokenizer as suggested by Claude. After some research, I decided to use the following as suggested by Claude. I also decided to use a dedicated pad token instead of using the eot token for padding as is sometimes done. I find these tokens to be a lot more readable and easy to follow when testing ad debugging
-# Define all special tokens including dedicated padding token
+"""
+add special tokens to tokenizer as suggested by Claude. After some research, I decided to use the following as suggested by Claude. I also decided to use a dedicated pad token instead of using the eot token for padding as is sometimes done. I find these tokens to be a lot more readable and easy to follow when testing and debugging. However, note that there many approaches to creating chat templates. The main takeaways from my research were to be consistent and aviod designs that might cause the model to get confused as to the purpose of the token. This is why I decided to use to use a dedicated pad token instead of using the eot token as padding. I was never able to understand how models that do this avoid confusing a legitimate eot token with padding
 
+Here is an explanation of why the special tokens are created with the pad token getting it's own individual key while the other custom tokens are placed in a list with key "additional_special_token"
+
+The Two Categories of Special Tokens
+1. Standard Special Tokens (dedicated keys)
+These have predefined roles across all Huggingface tokenizers (although tokenizers may well use just a subset):
+
+bos_token - Beginning of sequence (e.g., <s>)
+eos_token - End of sequence (e.g., </s>)
+pad_token - Padding token
+unk_token - Unknown token
+sep_token - Separator token (used in some models like BERT)
+cls_token - Classification token (used in some models like BERT)
+mask_token - Mask token (for masked language modeling)
+
+These have specific behaviors built into the tokenizer. For example:
+
+pad_token is automatically used when you pad sequences
+eos_token might be used to signal when generation should stop
+
+2. Additional Special Tokens (list)
+These are custom tokens you want to add that don't fit the predefined roles:
+
+additional_special_tokens - A list of any custom special tokens you want
+
+These tokens are treated as special (won't be split during tokenization) but don't have automatic behavior.
+
+Why pad_token gets its own key:
+
+The tokenizer needs to know: "When I pad, use THIS token"
+When you call tokenizer.pad(), it automatically uses tokenizer.pad_token
+It has functional significance beyond just being "special"
+
+Why the others go in additional_special_tokens:
+
+They mark structure in your chat format
+But the tokenizer doesn't need to automatically use them for anything
+You manually insert them via your chat template
+
+The key insight: dedicated keys give tokens automatic behavior, additional_special_tokens just marks them as "don't split these during tokenization". For chat formatting, you usually want full manual control, so additional_special_tokens is the right choice for <|im_start|> and <|im_end|>.
+
+FYI:
+These attributes exist on ALL HuggingFace tokenizers
+tokenizer.bos_token
+tokenizer.eos_token
+tokenizer.pad_token
+tokenizer.unk_token
+tokenizer.sep_token
+tokenizer.cls_token
+tokenizer.mask_token
+
+# And their IDs
+tokenizer.bos_token_id
+tokenizer.eos_token_id
+# etc.
+"""
+
+# Define all special tokens including dedicated padding token
 special_tokens_dict = {
     "pad_token": "<|pad|>",
     "additional_special_tokens": [
@@ -229,7 +305,7 @@ print(f"Added {num_added} special tokens to tokenizer")
 print(f"Padding token: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
 print(f"Special tokens: {tokenizer.additional_special_tokens}")
 
-print(f" <|im_start|> token: {tokenizer.additional_special_tokens}")
+print(f" <|im_start|> token: {tokenizer.additional_special_tokens[0]}")
 
 # Set padding side to right (standard for dedicated pad token)
 tokenizer.padding_side = 'right'
@@ -239,9 +315,7 @@ tokenizer.padding_side = 'right'
 # test the tokenizer
 test_text = ['these are very dark and awful days.  I fear things will get much worse.', 'Who knows what will happen']
 
-tokenizer.add_bos_token = False
-tokenizer.add_eos_token = False
-
+# Notice the tokenizers built-in begining and ending of sequence tokens which we will disable the  since we will have our own custom version
 tokenized = tokenizer(test_text)
 print(type(tokenized))
 print(tokenized)
@@ -277,17 +351,10 @@ chat_template = """
 tokenizer.chat_template = chat_template
 
 
-
 # %%
 # test chat template formatter
 
-# messages = [
-#     {"role": "system", "content": "You are helpful."},
-#     {"role": "user", "content": "What is 2+2?"},
-#     {"role": "assistant", "content": "4"},
-#     {"role": "user", "content": "What about 3+3?"}
-# ]
-
+# select the first conversation from the "messages" column of the dataset_ultrachar_with_sys_role Dataset
 messages = dataset_ultrachat_with_sys_role['messages'][0]
 
 # Training scenario (add_generation_prompt=False)
@@ -309,25 +376,44 @@ formatted_inference = tokenizer.apply_chat_template(
 print("INFERENCE FORMAT:")
 print(formatted_inference)
 
-#%%
-from transformers import DataCollatorForLanguageModeling
-data_collator = DataCollatorForLanguageModeling(
-    tokenizer=tokenizer,
-    mlm=False  # Causal language modeling, not masked
+
+# %%
+# Now we apply the chat template and tokenize the full dataset
+
+def tokenize_conversation(example):
+    """Apply chat template and tokenize"""
+    tokenized = tokenizer.apply_chat_template(
+        example['messages'],
+        tokenize=True,
+        add_generation_prompt=False,
+        truncation=True,
+        max_length=2048
+    )
+    return {"input_ids": tokenized}
+
+
+dataset_templated_tokenized = dataset_ultrachat_with_sys_role.map(
+    # This applys tokenize_conversation() to dataset_ultrachat_with_sys_role.  "input_ids" is added as a new column in dataset_templated_tokenized
+    tokenize_conversation, 
+    
+    # this removes all the old column_names from dataset_templated_tokenized. So tokenized_ dataset will have just one column "input_ids" which a lot more memory effiecient. Depending on your training needs you may opt to keep some of the old columns
+    remove_columns=dataset_ultrachat_with_sys_role.column_names,
+    desc="Tokenizing conversations"
 )
 
 # %%
-column_names = dataset_ultrachat['train_sft'].column_names
-column_names
-# %%
-f = dataset_ultrachat['train_sft'].map(formatter)
-f
-# %%
-test = load_dataset("HuggingFaceH4/ultrachat_200k", split='train_sft')
+# Inspect dataset_templated_tokenized and save to disk
 
+print(dataset_templated_tokenized.column_names)
+print(len(dataset_templated_tokenized['input_ids']))
+print(dataset_templated_tokenized.select(range(0,2))['input_ids'])
 
+# Save to disk
+dataset_templated_tokenized.save_to_disk("./dataset_ultrachat_templated_tokenized")
 # %%
-print(type(test))
-print(test.column_names)
+from datasets import load_from_disk
+
+loaded_dataset = load_from_disk("./dataset_ultrachat_templated_tokenized")
+dataset_templated_tokenized.select(range(0,2))['input_ids'] == loaded_dataset.select(range(0,2))['input_ids']
 
 # %%
