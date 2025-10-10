@@ -49,3 +49,5 @@ debug.log
 
 # tokenized and sharded files
 dataset_ultrachat_templated_tokenized/
+dataset_ultrachat_templated/
+dataset_ultrachat_train_sft_templated/

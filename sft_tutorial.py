@@ -4,70 +4,71 @@ from datasets import load_dataset
 
 # %%
 # This is a huggingface dictionary like object see comments below for details: 
-dataset_ultrachat = load_dataset("HuggingFaceH4/ultrachat_200k")
+def get_dataset(dataset_name: str=None):
+    """
+    We will be working with dataset downloads from Huggingface. I thought it would be useful to get a basic understanding of the objects returned by Huggingface.
 
-"""
-We will be working with dataset downloads from Huggingface. I thought it would be useful to get a basic understanding of the objects returned by Huggingface.
+    load_dataset() returns a Huggingface DatasetDict object which is a dictionary like object. Here is a primer on Huggingface DatasetDict object:
 
-load_dataset() returns a Huggingface DatasetDict object which is a dictionary like object. Here is a primer on Huggingface DatasetDict object:
+        DatasetDict object:
+        The DatasetDict in Hugging Face's datasets library is a container for multiple Dataset objects, typically representing different splits of a dataset like "train," "validation," and "test." It acts like a Python dictionary where keys are the names of the splits (e.g., "train", "validation", "test") and values are Dataset objects corresponding to those splits. 
 
-    DatasetDict object:
-    The DatasetDict in Hugging Face's datasets library is a container for multiple Dataset objects, typically representing different splits of a dataset like "train," "validation," and "test." It acts like a Python dictionary where keys are the names of the splits (e.g., "train", "validation", "test") and values are Dataset objects corresponding to those splits. 
+        Key Differences vs Python dictionary:
+            Purpose: A Python dictionary is a general data structure, while DatasetDict is specifically designed for managing and accessing different splits of a dataset within the Hugging Face ecosystem.
 
-    Key Differences vs Python dictionary:
-        Purpose: A Python dictionary is a general data structure, while DatasetDict is specifically designed for managing and accessing different splits of a dataset within the Hugging Face ecosystem.
+            Contents: A Python dictionary can store any key-value pairs. A DatasetDict specifically stores Dataset objects as its values, with keys typically representing the dataset split names (e.g., "train", "validation").
 
-        Contents: A Python dictionary can store any key-value pairs. A DatasetDict specifically stores Dataset objects as its values, with keys typically representing the dataset split names (e.g., "train", "validation").
+            Functionality: DatasetDict inherits methods from Dataset objects and provides functionalities tailored for data processing in machine learning, such as easy access to splits, mapping, filtering, and caching mechanisms for efficient handling of large datasets. Standard Python dictionaries do not inherently offer these specialized data processing functionalities.
+            Memory Management: Dataset objects within a DatasetDict are often memory-mapped or loaded on demand, especially for large datasets, to efficiently manage memory. Python dictionaries typically load all data into memory directly.
 
-        Functionality: DatasetDict inherits methods from Dataset objects and provides functionalities tailored for data processing in machine learning, such as easy access to splits, mapping, filtering, and caching mechanisms for efficient handling of large datasets. Standard Python dictionaries do not inherently offer these specialized data processing functionalities.
-        Memory Management: Dataset objects within a DatasetDict are often memory-mapped or loaded on demand, especially for large datasets, to efficiently manage memory. Python dictionaries typically load all data into memory directly.
+            In summary:
+            While a DatasetDict structurally resembles a Python dictionary (mapping keys to values), its specialized purpose and integration with the Hugging Face datasets library provide advanced features for managing and processing large, multi-split datasets for machine learning tasks. A standard Python dictionary is a more general-purpose data structure without these specialized functionalities.
 
-        In summary:
-        While a DatasetDict structurally resembles a Python dictionary (mapping keys to values), its specialized purpose and integration with the Hugging Face datasets library provide advanced features for managing and processing large, multi-split datasets for machine learning tasks. A standard Python dictionary is a more general-purpose data structure without these specialized functionalities.
+    In our case, the DatasetDict object returned by raw_datasets = load_dataset("HuggingFaceH4/ultrachat_200k") has the following keys: 'train_sft', 'test_sft', 'train_gen', 'test_gen'. Each of these is a Dataset object. Note that we could have directly loaded one of the splits with load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft"). Here is a primer in on the Dataset object:
 
-In our case, the DatasetDict object returned by raw_datasets = load_dataset("HuggingFaceH4/ultrachat_200k") has the following keys: 'train_sft', 'test_sft', 'train_gen', 'test_gen'. Each of these is a Dataset object. Note that we could have directly loaded one of the splits with load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft"). Here is a primer in on the Dataset object:
+        A Dataset object in Hugging Face is a highly optimized, in-memory data structure designed for efficient processing of large datasets, particularly in the context of machine learning. It can be thought of as a table-like structure, similar to a Pandas DataFrame, but with several key differences optimized for ML workloads. Each column has a specific data type, and each row represents one data point or example. .
 
-    A Dataset object in Hugging Face is a highly optimized, in-memory data structure designed for efficient processing of large datasets, particularly in the context of machine learning. It can be thought of as a table-like structure, similar to a Pandas DataFrame, but with several key differences optimized for ML workloads. Each column has a specific data type, and each row represents one data point or example. .
+        Here's a breakdown of its structure:
+            Columns (Features): 
+                The Dataset object contains various columns, each representing a "feature" of your data. These features can be of various types, including:
+                    Primitive types: int, float, bool, string.
+                    Nested structures: List, Array, ClassLabel, Sequence, Value.
+                    Specialized types: Image, Audio, Video (for multimedia data).
 
-    Here's a breakdown of its structure:
-        Columns (Features): 
-            The Dataset object contains various columns, each representing a "feature" of your data. These features can be of various types, including:
-                Primitive types: int, float, bool, string.
-                Nested structures: List, Array, ClassLabel, Sequence, Value.
-                Specialized types: Image, Audio, Video (for multimedia data).
+                The feature schema defines the structure of each column. In ultrachat_200k, you'll have features with complex nested structures. For instance, a "messages" column might contain a list of dictionaries, where each dictionary has keys like "role" (whether it's a user or assistant message) and "content" (the actual text). The Dataset object understands and preserves these nested structures, so you don't lose information about the conversation flow.
+            
+            Rows (Examples): Each row in the Dataset represents a single data example. For the ultrachat_200k dataset, each row would represent one conversation or dialogue example
 
-            The feature schema defines the structure of each column. In ultrachat_200k, you'll have features with complex nested structures. For instance, a "messages" column might contain a list of dictionaries, where each dictionary has keys like "role" (whether it's a user or assistant message) and "content" (the actual text). The Dataset object understands and preserves these nested structures, so you don't lose information about the conversation flow.
-        
-        Rows (Examples): Each row in the Dataset represents a single data example. For the ultrachat_200k dataset, each row would represent one conversation or dialogue example
+            Efficiency:
+                One of the most important aspects of Dataset is its backend storage mechanism. It uses Apache Arrow, which is a columnar memory format. This means data is stored column-by-column rather than row-by-row. This columnar format is extremely efficient for the types of operations you typically do in ML - like filtering based on certain criteria, selecting specific columns, or applying transformations.
+                The Dataset uses memory-mapping, which is crucial for handling large datasets. Instead of loading the entire dataset into RAM, it maps the file directly into your process's virtual memory space. The operating system then handles loading only the portions of data you actually access. This means you can work with datasets that are tens or hundreds of gigabytes even if you only have a few gigabytes of RAM available.
+                The Dataset supports both in-memory and on-disk modes. For smaller datasets, it can operate entirely in memory for speed. For larger ones, it keeps data on disk and streams it as needed. You typically don't need to worry about this distinction as it handles it automatically.
+                Each Dataset maintains metadata about itself - its cache files location, fingerprint (a hash representing its exact state and transformation history), and format. The fingerprint is particularly clever: it's used for caching transformed datasets. If you apply the same transformation twice, Hugging Face can recognize this and reuse the cached result rather than recomputing
 
-        Efficiency:
-            One of the most important aspects of Dataset is its backend storage mechanism. It uses Apache Arrow, which is a columnar memory format. This means data is stored column-by-column rather than row-by-row. This columnar format is extremely efficient for the types of operations you typically do in ML - like filtering based on certain criteria, selecting specific columns, or applying transformations.
-            The Dataset uses memory-mapping, which is crucial for handling large datasets. Instead of loading the entire dataset into RAM, it maps the file directly into your process's virtual memory space. The operating system then handles loading only the portions of data you actually access. This means you can work with datasets that are tens or hundreds of gigabytes even if you only have a few gigabytes of RAM available.
-            The Dataset supports both in-memory and on-disk modes. For smaller datasets, it can operate entirely in memory for speed. For larger ones, it keeps data on disk and streams it as needed. You typically don't need to worry about this distinction as it handles it automatically.
-            Each Dataset maintains metadata about itself - its cache files location, fingerprint (a hash representing its exact state and transformation history), and format. The fingerprint is particularly clever: it's used for caching transformed datasets. If you apply the same transformation twice, Hugging Face can recognize this and reuse the cached result rather than recomputing
+            data access:
+                The Dataset uses memory-mapping, which is crucial for handling large datasets. Instead of loading the entire dataset into RAM, it maps the file directly into your process's virtual memory space. The operating system then handles loading only the portions of data you actually access. This means you can work with datasets that are tens or hundreds of gigabytes even if you only have a few gigabytes of RAM available.
+                When you access data from a Dataset, you can do so in multiple ways. You can access it like a dictionary using column names, you can access individual rows by index, you can slice it to get ranges of rows, and you can iterate through it in batches. The Dataset is lazy by default in many operations, meaning it doesn't actually compute or load data until you explicitly ask for it.
 
-        data access:
-            The Dataset uses memory-mapping, which is crucial for handling large datasets. Instead of loading the entire dataset into RAM, it maps the file directly into your process's virtual memory space. The operating system then handles loading only the portions of data you actually access. This means you can work with datasets that are tens or hundreds of gigabytes even if you only have a few gigabytes of RAM available.
-            When you access data from a Dataset, you can do so in multiple ways. You can access it like a dictionary using column names, you can access individual rows by index, you can slice it to get ranges of rows, and you can iterate through it in batches. The Dataset is lazy by default in many operations, meaning it doesn't actually compute or load data until you explicitly ask for it.
+            methods for data manipulation and transformation include:
+                map(): To apply a function to each example.
+                filter(): To select specific examples based on a condition.
+                shuffle(): To randomize the order of examples.
+                select(): To select a subset of examples by index.
+                shard(): To divide the dataset into smaller chunks.
 
-        methods for data manipulation and transformation include:
-            map(): To apply a function to each example.
-            filter(): To select specific examples based on a condition.
-            shuffle(): To randomize the order of examples.
-            select(): To select a subset of examples by index.
-            shard(): To divide the dataset into smaller chunks.
+                Datasets are immutable in a functional programming sense. When you apply transformations - like mapping a function over the dataset, filtering rows, or selecting columns - you don't modify the original Dataset. Instead, these operations return a new Dataset object. However, this doesn't mean the data is duplicated in memory. Hugging Face uses clever caching and referencing so that multiple Dataset objects can share the same underlying data storage efficiently.
 
-            Datasets are immutable in a functional programming sense. When you apply transformations - like mapping a function over the dataset, filtering rows, or selecting columns - you don't modify the original Dataset. Instead, these operations return a new Dataset object. However, this doesn't mean the data is duplicated in memory. Hugging Face uses clever caching and referencing so that multiple Dataset objects can share the same underlying data storage efficiently.
+            The Dataset object integrates seamlessly with PyTorch and TensorFlow. You can convert it to those frameworks' native formats, or you can use it directly with Hugging Face's Trainer API, which knows how to efficiently batch and feed data from a Dataset during training.
+    """
+    return load_dataset(dataset_name)
 
-        The Dataset object integrates seamlessly with PyTorch and TensorFlow. You can convert it to those frameworks' native formats, or you can use it directly with Hugging Face's Trainer API, which knows how to efficiently batch and feed data from a Dataset during training.
-"""
+# help(get_dataset)
+dataset_ultrachat = get_dataset("HuggingFaceH4/ultrachat_200k")
 
 # %%
 # examine type of objects returned
 print(f'type of dataset_ultrachat: {type(dataset_ultrachat)}')
 print(f'dataset_ultrachat keys: {dataset_ultrachat.keys()}')
-print(f'type of dataset_ultrachat["train_sft"]: {type(dataset_ultrachat['train_sft'])}')
-
 
 # %%
 # inspect the structure of the 'train_sft' split
@@ -172,14 +173,12 @@ for example in dataset_ultrachat['train_sft'].select(range(0,10)):
 
 
 #%%
-"""
- The HuggingFaceH4/ultrachat_200k dataset  does not include a "system" role. the code below inserts a system role at the begining of each example. As best as I could determine, models like GPT, Claude etc. use a very simple, fixed system message (if at all) during base SFT training.  System message flexibility is added later through RLHF/post-training. I used Claude ot generate some of this code.
- """
-
 # this function checks, for each example, if the messages' first turn in the conversation includes a "system" role. If not, it creates a turn with a "system" role and content and prepends it the converstation
 def add_system_message(example):
     """ 
     args: example. one example (row) from the train_sft split
+
+    The HuggingFaceH4/ultrachat_200k dataset  does not include a "system" role. the code below inserts a system role at the begining of each example. As best as I could determine, models like GPT, Claude etc. use a very simple, fixed system message (if at all) during base SFT training.  System message flexibility is added later through RLHF/post-training. I used Claude ot generate some of this code.
     """
     messages = example['messages'] # extract the messages column from train_sft split
     
@@ -192,20 +191,20 @@ def add_system_message(example):
 dataset_ultrachat_with_sys_role = dataset_ultrachat['train_sft'].map(add_system_message)
 
 #%%
+# Examine dataset_ultrachat_with_sys_role = dataset_ultrachat
+print(f'\ntype of dataset_ultrachat_with_sys_role: {type(dataset_ultrachat_with_sys_role)}')
+print(f'dataset_ultrachat_with_sys_role features: {dataset_ultrachat_with_sys_role.features}\n')
+
 print("Original first example:")
 print(dataset_ultrachat['train_sft']['messages'][0])  
 
-print(f'\ntype of dataset_ultrachat_with_sys_role: {type(dataset_ultrachat_with_sys_role)}')
-print(f'dataset_ultrachat_with_sys_role features: {dataset_ultrachat_with_sys_role.features}')
-
-
 print("\nWith system message:")
-
 print(dataset_ultrachat_with_sys_role['messages'][0])
 
+# At this point our raw dataset is ready
 #%%
 
-# Access to the the mistral model requires that you log into huggingface and generate an access token. Then the access token must be provided as per the code below
+# Now we move on to accessing the model we want to fine tune. Access to the the mistral model requires that you log into huggingface and generate an access token. Then the access token must be provided as per the code below
 
 from transformers import AutoTokenizer
 from huggingface_hub import login
@@ -220,6 +219,7 @@ print(f"Your API Key: {hf_token}")
 login(token=hf_token)
 
 #%%
+# load the model and inspect whether bos, eos and padding tokens exist in the tokenizer for this model
 model = "mistralai/Mistral-7B-v0.1"
 tokenizer = AutoTokenizer.from_pretrained(model)
 #check if model tokenizer has eos and/or pad tokens
@@ -229,65 +229,77 @@ print(tokenizer.pad_token_id)
 
 
 #%%
-"""
-add special tokens to tokenizer as suggested by Claude. After some research, I decided to use the following as suggested by Claude. I also decided to use a dedicated pad token instead of using the eot token for padding as is sometimes done. I find these tokens to be a lot more readable and easy to follow when testing and debugging. However, note that there many approaches to creating chat templates. The main takeaways from my research were to be consistent and aviod designs that might cause the model to get confused as to the purpose of the token. This is why I decided to use to use a dedicated pad token instead of using the eot token as padding. I was never able to understand how models that do this avoid confusing a legitimate eot token with padding
 
-Here is an explanation of why the special tokens are created with the pad token getting it's own individual key while the other custom tokens are placed in a list with key "additional_special_token"
+#%%
+# add special tokens to the model tokenizer to facilitate chat template
+def add_tokens(tokenizer=None, special_tokens=None):
+    """
+    In order to perform SFT, we need to create a "chat template". A chat template basically adds special tokens to the conversations in our dataset to help the model learn a chat conversational structure. 
 
-The Two Categories of Special Tokens
-1. Standard Special Tokens (dedicated keys)
-These have predefined roles across all Huggingface tokenizers (although tokenizers may well use just a subset):
+    After some research, I decided to use a template structure suggested by Claude. I also decided to use a dedicated pad token instead of using the eot token for padding as is sometimes done. I find these tokens to be a lot more readable and easy to follow when testing and debugging. However, note that there are many approaches to creating chat templates. The main takeaways from my research were to be consistent and avoid designs that might cause the model to get confused as to the purpose of the token. This is why I decided to use a dedicated pad token instead of using the eot token as padding. I was never able to understand how models that do this avoid confusing a legitimate eot token with padding.
 
-bos_token - Beginning of sequence (e.g., <s>)
-eos_token - End of sequence (e.g., </s>)
-pad_token - Padding token
-unk_token - Unknown token
-sep_token - Separator token (used in some models like BERT)
-cls_token - Classification token (used in some models like BERT)
-mask_token - Mask token (for masked language modeling)
+    Here is an explanation of why the special tokens are created with the pad token getting it's own individual key while the other custom tokens are placed in a list with key "additional_special_token"
 
-These have specific behaviors built into the tokenizer. For example:
+    The Two Categories of Special Tokens
+    1. Standard Special Tokens (dedicated keys)
+    These have predefined roles across all Huggingface tokenizers (although tokenizers may well use just a subset):
 
-pad_token is automatically used when you pad sequences
-eos_token might be used to signal when generation should stop
+    bos_token - Beginning of sequence (e.g., <s>)
+    eos_token - End of sequence (e.g., </s>)
+    pad_token - Padding token
+    unk_token - Unknown token
+    sep_token - Separator token (used in some models like BERT)
+    cls_token - Classification token (used in some models like BERT)
+    mask_token - Mask token (for masked language modeling)
 
-2. Additional Special Tokens (list)
-These are custom tokens you want to add that don't fit the predefined roles:
+    These have specific behaviors built into the tokenizer. For example:
 
-additional_special_tokens - A list of any custom special tokens you want
+    pad_token is automatically used when you pad sequences
+    eos_token might be used to signal when generation should stop
 
-These tokens are treated as special (won't be split during tokenization) but don't have automatic behavior.
+    2. Additional Special Tokens (list)
+    These are custom tokens you want to add that don't fit the predefined roles:
 
-Why pad_token gets its own key:
+    additional_special_tokens - A list of any custom special tokens you want
 
-The tokenizer needs to know: "When I pad, use THIS token"
-When you call tokenizer.pad(), it automatically uses tokenizer.pad_token
-It has functional significance beyond just being "special"
+    These tokens are treated as special (won't be split during tokenization) but don't have automatic behavior.
 
-Why the others go in additional_special_tokens:
+    Why pad_token gets its own key:
 
-They mark structure in your chat format
-But the tokenizer doesn't need to automatically use them for anything
-You manually insert them via your chat template
+    The tokenizer needs to know: "When I pad, use THIS token"
+    When you call tokenizer.pad(), it automatically uses tokenizer.pad_token
+    It has functional significance beyond just being "special"
 
-The key insight: dedicated keys give tokens automatic behavior, additional_special_tokens just marks them as "don't split these during tokenization". For chat formatting, you usually want full manual control, so additional_special_tokens is the right choice for <|im_start|> and <|im_end|>.
+    Why the others go in additional_special_tokens:
 
-FYI:
-These attributes exist on ALL HuggingFace tokenizers
-tokenizer.bos_token
-tokenizer.eos_token
-tokenizer.pad_token
-tokenizer.unk_token
-tokenizer.sep_token
-tokenizer.cls_token
-tokenizer.mask_token
+    They mark structure in your chat format
+    But the tokenizer doesn't need to automatically use them for anything
+    You manually insert them via your chat template
 
-# And their IDs
-tokenizer.bos_token_id
-tokenizer.eos_token_id
-# etc.
-"""
+    The key insight: dedicated keys give tokens automatic behavior, additional_special_tokens just marks them as "don't split these during tokenization". For chat formatting, you usually want full manual control, so additional_special_tokens is the right choice for <|im_start|> and <|im_end|>.
 
+    FYI:
+    These attributes exist on ALL HuggingFace tokenizers
+    tokenizer.bos_token
+    tokenizer.eos_token
+    tokenizer.pad_token
+    tokenizer.unk_token
+    tokenizer.sep_token
+    tokenizer.cls_token
+    tokenizer.mask_token
+
+    # And their IDs
+    tokenizer.bos_token_id
+    tokenizer.eos_token_id
+    # etc.
+    """
+    tokenizer.add_special_tokens(special_tokens)
+    tokenizer.padding_side = 'right' # Set padding side to right (standard for dedicated pad token)
+    # disable this model's automatically adding built-in begining of sequence and end of sequence tokens since we are creating our own custom tokens
+    tokenizer.add_bos_token = False
+    tokenizer.add_eos_token = False
+
+    
 # Define all special tokens including dedicated padding token
 special_tokens_dict = {
     "pad_token": "<|pad|>",
@@ -299,23 +311,18 @@ special_tokens_dict = {
 }
 
 # Add special tokens to tokenizer
-num_added = tokenizer.add_special_tokens(special_tokens_dict)
+add_tokens(tokenizer= tokenizer, special_tokens=special_tokens_dict)
 
-print(f"Added {num_added} special tokens to tokenizer")
+# inspect special tokens
 print(f"Padding token: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
 print(f"Special tokens: {tokenizer.additional_special_tokens}")
-
 print(f" <|im_start|> token: {tokenizer.additional_special_tokens[0]}")
-
-# Set padding side to right (standard for dedicated pad token)
-tokenizer.padding_side = 'right'
 
 
 #%%
 # test the tokenizer
 test_text = ['these are very dark and awful days.  I fear things will get much worse.', 'Who knows what will happen']
 
-# Notice the tokenizers built-in begining and ending of sequence tokens which we will disable the  since we will have our own custom version
 tokenized = tokenizer(test_text)
 print(type(tokenized))
 print(tokenized)
@@ -324,10 +331,6 @@ tokenizer.decode(tokenized['input_ids'][0])
 
 #%%
 # Create a chat template
-
-# disable this model's built-in begining of sequence and end of sequence tokens since we created our own custom tokens above
-tokenizer.add_bos_token = False
-tokenizer.add_eos_token = False
 
 # Code created by Claude. The chat template is based on the Jinja2 template syntax, which is what HuggingFace tokenizers expect for chat templates. A conversation is formatted into a single tokenizable sequence for a given model. https://huggingface.co/docs/transformers/en/chat_templating_writing
 
@@ -349,7 +352,6 @@ chat_template = """
 
 # set the tokenizers chat template to the template we created
 tokenizer.chat_template = chat_template
-
 
 # %%
 # test chat template formatter
@@ -376,44 +378,53 @@ formatted_inference = tokenizer.apply_chat_template(
 print("INFERENCE FORMAT:")
 print(formatted_inference)
 
+#%%
+# save the customized tokenizer so we don't have to redo all the above if we want to re-use our custom token and chat template
+save_path = "./tokenizer_with_specials"
+tokenizer.save_pretrained(save_path)
+
 
 # %%
-# Now we apply the chat template and tokenize the full dataset
+# Now we apply the chat template and tokenize the full dataset. Note that here we are still setting the tokenize argument to False because we will let the Huggingface SFTTrainer take care of tokenizing later.
 
-def tokenize_conversation(example):
+def apply_template_to_conversation(example):
     """Apply chat template and tokenize"""
     tokenized = tokenizer.apply_chat_template(
         example['messages'],
-        tokenize=True,
+        tokenize=False,
         add_generation_prompt=False,
         truncation=True,
         max_length=2048
     )
-    return {"input_ids": tokenized}
+    return {"templated_msgs": tokenized}
 
 
-dataset_templated_tokenized = dataset_ultrachat_with_sys_role.map(
-    # This applys tokenize_conversation() to dataset_ultrachat_with_sys_role.  "input_ids" is added as a new column in dataset_templated_tokenized
-    tokenize_conversation, 
+dataset_templated = dataset_ultrachat_with_sys_role.map(
+    # This applys tokenize_conversation() to dataset_ultrachat_with_sys_role.  "templated_msgs" is added as a new column in dataset_templated
+    apply_template_to_conversation, 
     
-    # this removes all the old column_names from dataset_templated_tokenized. So tokenized_ dataset will have just one column "input_ids" which a lot more memory effiecient. Depending on your training needs you may opt to keep some of the old columns
+    # this removes all the old column_names from dataset_templated. So tokenized_ dataset will have just one column "templated_msgs" which a lot more memory effiecient. Depending on your training needs you may opt to keep some of the old columns
     remove_columns=dataset_ultrachat_with_sys_role.column_names,
-    desc="Tokenizing conversations"
+    desc="Apply chat template to conversations"
 )
 
 # %%
-# Inspect dataset_templated_tokenized and save to disk
-
-print(dataset_templated_tokenized.column_names)
-print(len(dataset_templated_tokenized['input_ids']))
-print(dataset_templated_tokenized.select(range(0,2))['input_ids'])
+# Inspect dataset_templated and save to disk
+print(dataset_templated.column_names)
+print(len(dataset_templated['templated_msgs']))
+print(dataset_templated.select(range(0,2))['templated_msgs'])
 
 # Save to disk
-dataset_templated_tokenized.save_to_disk("./dataset_ultrachat_templated_tokenized")
+dataset_templated.save_to_disk("./dataset_ultrachat_train_sft_templated")
+
 # %%
+# just check to make sure data was saved properly and can be recovered
 from datasets import load_from_disk
 
-loaded_dataset = load_from_disk("./dataset_ultrachat_templated_tokenized")
-dataset_templated_tokenized.select(range(0,2))['input_ids'] == loaded_dataset.select(range(0,2))['input_ids']
+loaded_dataset = load_from_disk("./dataset_ultrachat_train_sft_templated")
+dataset_templated.select(range(0,2))['templated_msgs'] == loaded_dataset.select(range(0,2))['templated_msgs']
+
+# %%
+print(loaded_dataset['templated_msgs'][0])
 
 # %%
