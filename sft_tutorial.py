@@ -229,8 +229,6 @@ print(tokenizer.pad_token_id)
 
 
 #%%
-
-#%%
 # add special tokens to the model tokenizer to facilitate chat template
 def add_tokens(tokenizer=None, special_tokens=None):
     """
