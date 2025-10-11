@@ -381,6 +381,8 @@ print(formatted_inference)
 save_path = "./tokenizer_with_specials"
 tokenizer.save_pretrained(save_path)
 
+#%%
+loaded_tokenizer = AutoTokenizer.from_pretrained(save_path)
 
 # %%
 # Now we apply the chat template and tokenize the full dataset. Note that here we are still setting the tokenize argument to False because we will let the Huggingface SFTTrainer take care of tokenizing later.

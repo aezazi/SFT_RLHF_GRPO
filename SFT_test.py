@@ -53,3 +53,63 @@ print(smol_chat)
 
 
 # %%
+#%%
+# load the model and inspect whether bos, eos and padding tokens exist in the tokenizer for this model
+model = "mistralai/Mistral-7B-v0.1"
+tokenizer = AutoTokenizer.from_pretrained(model)
+#check if model tokenizer has eos and/or pad tokens
+print(tokenizer.bos_token_id)
+print(tokenizer.eos_token_id)
+print(tokenizer.pad_token_id)
+
+# add special tokens to the model tokenizer to facilitate chat template
+def add_tokens(tokenizer=None, special_tokens=None):
+    
+    tokenizer.add_special_tokens(special_tokens)
+    tokenizer.padding_side = 'right' # Set padding side to right (standard for dedicated pad token)
+    # disable this model's automatically adding built-in begining of sequence and end of sequence tokens since we are creating our own custom tokens
+    tokenizer.add_bos_token = False
+    tokenizer.add_eos_token = False
+
+    
+# Define all special tokens including dedicated padding token
+special_tokens_dict = {
+    "pad_token": "<|pad|>",
+    "additional_special_tokens": [
+        "<|im_start|>",
+        "<|im_end|>",
+        "<|endoftext|>"
+    ]
+}
+
+# Add special tokens to tokenizer
+add_tokens(tokenizer= tokenizer, special_tokens=special_tokens_dict)
+
+# inspect special tokens
+print(f"Padding token: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
+print(f"Special tokens: {tokenizer.additional_special_tokens}")
+print(f" <|im_start|> token: {tokenizer.additional_special_tokens[0]}")
+
+#%%
+# Create a chat template
+
+# Code created by Claude. The chat template is based on the Jinja2 template syntax, which is what HuggingFace tokenizers expect for chat templates. A conversation is formatted into a single tokenizable sequence for a given model. https://huggingface.co/docs/transformers/en/chat_templating_writing
+
+chat_template = """
+{% if messages[0]['role'] == 'system' %}
+    {{ '<|im_start|>system\n' + messages[0]['content'] + '<|im_end|>\n' }}
+{% endif %}
+
+{% for message in messages %}
+    {% if message['role'] != 'system' %}
+        {{ '<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>\n' }}
+    {% endif %}
+{% endfor %}
+
+{% if add_generation_prompt %}
+    {{ '<|im_start|>assistant\n' }}
+{% endif %}
+"""
+
+# set the tokenizers chat template to the template we created
+tokenizer.chat_template = chat_template
