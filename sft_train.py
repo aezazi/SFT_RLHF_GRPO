@@ -4,10 +4,9 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
 )
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 
 model_name = "mistralai/Mistral-7B-v0.1"
@@ -53,6 +52,9 @@ bnb_config_8bit = BitsAndBytesConfig(
 bnb_config_full = None  # Don't pass quantization_config to from_pretrained
 
 
+# bnb_config = bnb_config_4bit    # Fast, efficient (recommended for starting)
+bnb_config = bnb_config_8bit  # Better quality (recommended for H200)
+# bnb_config = None             # Full precision (best quality, H200 can handle it)
 
 # For quantized models (4-bit or 8-bit)
 if bnb_config is not None:
@@ -62,7 +64,7 @@ if bnb_config is not None:
         device_map="auto",                    # Automatic device placement
         trust_remote_code=True,
         attn_implementation="flash_attention_2",  # Enable Flash Attention 2
-        torch_dtype=torch.bfloat16,          # Use bf16 for non-quantized layers
+        dtype=torch.bfloat16,          # Use bf16 for non-quantized layers
     )
     
     # Resize embeddings to accommodate new tokens
@@ -86,7 +88,7 @@ else:
         device_map="auto",
         trust_remote_code=True,
         attn_implementation="flash_attention_2",
-        torch_dtype=torch.bfloat16,          # Full bf16 precision
+        dtype=torch.bfloat16,          # Full bf16 precision
     )
     
     # Resize embeddings to accommodate new tokens
@@ -104,7 +106,7 @@ print(f"Model dtype: {model.dtype}")
 # %%
 # Create Huggingface DataCollatorForCompletionOnlyLM 
 """
-We use the DataCollatorForCompletionOnlyLM to automatically mask user and system portions of conversation. By setting the response_template parameter to  "<|im_start|>assistant\n", we are telling the datacollator to use only the assissant responses for training. We do this because we are cannot control what the user inputs only ow the assistant responds. The collator object created here will later be passed to the Trainer as an argument
+We use 
 """
 from trl import DataCollatorForCompletionOnlyLM
 
