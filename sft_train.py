@@ -104,18 +104,7 @@ print(f"Model dtype: {model.dtype}")
 
 
 # %%
-# Create Huggingface DataCollatorForCompletionOnlyLM 
-"""
-We use 
-"""
-from trl import DataCollatorForCompletionOnlyLM
 
-response_template = "<|im_start|>assistant\n"
-
-collator = DataCollatorForCompletionOnlyLM(
-    response_template=response_template,
-    tokenizer=tokenizer,
-)
 
 
 #%%
