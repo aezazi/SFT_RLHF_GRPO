@@ -156,6 +156,7 @@ def formatting_func(example):
         tokenize=False,
         add_generation_prompt=False
     )
+
 #%%
 # ============================================================================
 # 6. TRAINING CONFIGURATION (SFTConfig replaces TrainingArguments)
@@ -199,7 +200,7 @@ training_args = SFTConfig(
     
     # Evaluation
     do_eval=True,
-    evaluation_strategy="epoch",        # Evaluate at end of each epoch
+    eval_strategy="epoch",        # Evaluate at end of each epoch
     eval_steps=None,                    # Not used when strategy="epoch"
     
     # Saving
@@ -229,7 +230,7 @@ training_args = SFTConfig(
     dataset_text_field=None,           # We use formatting_func instead
     
     # Sequence handling
-    max_seq_length=2048,               # Maximum sequence length
+    max_length=2048,               # Maximum sequence length
     packing=True,                     # Set True if sequences are short/variable
     
     # RESPONSE MASKING (replaces DataCollatorForCompletionOnlyLM)
@@ -282,3 +283,7 @@ print("="*80 + "\n")
 
 # Train the model
 trainer.train()
+
+#%%
+
+# %%
