@@ -104,52 +104,181 @@ print(f"Model dtype: {model.dtype}")
 
 
 # %%
+# ============================================================================
+# 4. LORA CONFIGURATION
+# ============================================================================
+
+peft_config = LoraConfig(
+    r=64,                                # LoRA rank (higher = more parameters, better quality)
+    lora_alpha=128,                      # LoRA scaling factor (typically 2*r)
+    lora_dropout=0.05,                   # Dropout for regularization
+    bias="none",                         # Don't train bias parameters
+    task_type="CAUSAL_LM",              # Causal language modeling
+    target_modules=[                     # All linear layers in Mistral
+        "q_proj",    # Query projection
+        "k_proj",    # Key projection  
+        "v_proj",    # Value projection
+        "o_proj",    # Output projection
+        "gate_proj", # MLP gate
+        "up_proj",   # MLP up
+        "down_proj", # MLP down
+    ],
+    # Note: Not targeting embedding layers as they're already trainable after resize
+)
+
+# Apply LoRA to the model
+model = get_peft_model(model, peft_config)
+
+# Print trainable parameters
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+all_params = sum(p.numel() for p in model.parameters())
+print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_params:.2f}%)")
+
+
+#%%
+# ============================================================================
+# 5. LOAD DATASET AND CREATE FUNCTION TO APPLY CHAT TEMPLATE
+# ============================================================================
+
+# Load UltraChat dataset
+dataset = load_dataset("HuggingFaceH4/ultrachat_200k")
+train_dataset = dataset["train_sft"]
+eval_dataset = dataset["test_sft"]
+
+print(f"Train dataset size: {len(train_dataset)}")
+print(f"Eval dataset size: {len(eval_dataset)}")
+
+# Formatting function to apply chat template
+def formatting_func(example):
+    """Apply chat template to convert messages to formatted text"""
+    return tokenizer.apply_chat_template(
+        example["messages"],
+        tokenize=False,
+        add_generation_prompt=False
+    )
+#%%
+# ============================================================================
+# 6. TRAINING CONFIGURATION (SFTConfig replaces TrainingArguments)
+# ============================================================================
+
+output_dir = "./mistral-7b-ultrachat-sft"
+
+training_args = SFTConfig(
+    # Output and logging
+    output_dir=output_dir,
+    overwrite_output_dir=True,
+    report_to="tensorboard",            # Change to "wandb" if using Weights & Biases
+    logging_dir=f"{output_dir}/logs",
+    logging_steps=10,
+    logging_strategy="steps",
+    
+    # Training regime
+    num_train_epochs=3,                 # Number of epochs
+    max_steps=-1,                       # -1 means use num_train_epochs
+    
+    # Batch sizes - Optimized for H200
+    per_device_train_batch_size=8,      # Large batch possible with H200
+    per_device_eval_batch_size=8,
+    gradient_accumulation_steps=2,      # Effective batch size = 8*2 = 16
+    
+    # Optimization
+    learning_rate=2e-4,                 # Standard for LoRA
+    lr_scheduler_type="cosine",         # Cosine decay with warmup
+    warmup_ratio=0.03,                  # 3% warmup steps
+    weight_decay=0.01,                  # L2 regularization
+    max_grad_norm=1.0,                  # Gradient clipping
+    optim="paged_adamw_8bit",          # Memory-efficient optimizer
+    
+    # Precision
+    bf16=True,                          # Use bfloat16 (H200 supports it)
+    bf16_full_eval=True,               # Use bf16 for evaluation too
+    
+    # Memory optimizations
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"use_reentrant": False},  # More stable
+    
+    # Evaluation
+    do_eval=True,
+    evaluation_strategy="epoch",        # Evaluate at end of each epoch
+    eval_steps=None,                    # Not used when strategy="epoch"
+    
+    # Saving
+    save_strategy="epoch",              # Save at end of each epoch
+    save_total_limit=2,                 # Keep only 2 best checkpoints
+    load_best_model_at_end=True,       # Load best model after training
+    metric_for_best_model="eval_loss", # Use eval loss to determine best
+    greater_is_better=False,           # Lower loss is better
+    
+    # Reproducibility
+    seed=42,
+    data_seed=42,
+    
+    # Performance
+    dataloader_num_workers=4,          # Parallel data loading
+    dataloader_pin_memory=True,        # Faster data transfer to GPU
+    
+    # Misc
+    log_level="info",
+    disable_tqdm=False,
+    
+    # ========================================================================
+    # SFT-SPECIFIC PARAMETERS (New in SFTConfig)
+    # ========================================================================
+    
+    # Dataset formatting
+    dataset_text_field=None,           # We use formatting_func instead
+    
+    # Sequence handling
+    max_seq_length=2048,               # Maximum sequence length
+    packing=True,                     # Set True if sequences are short/variable
+    
+    # RESPONSE MASKING (replaces DataCollatorForCompletionOnlyLM)
+    completion_only_loss=True,         # Only compute loss on completions
+    response_template="<|im_start|>assistant\n",  # Where completions start
+    
+    # Additional SFT configs
+    dataset_kwargs={
+        "add_special_tokens": False,   # We handle special tokens in template
+        "append_concat_token": False,  # Don't add extra tokens
+    },
+)
 
 
 
 #%%
+# 7. SFT TRAINER CONFIGURATION
+# ============================================================================
+
+trainer = SFTTrainer(
+    model=model,
+    args=training_args,                # SFTConfig with all settings
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    tokenizer=tokenizer,
+    
+    # Dataset formatting
+    formatting_func=formatting_func,    # Apply chat template on-the-fly
+    
+    # Note: Response masking is now handled by SFTConfig parameters:
+    # - completion_only_loss=True
+    # - response_template="<|im_start|>assistant\n"
+)
 
 #%%
-# load the dataset
-dataset_ultrachat = load_dataset("HuggingFaceH4/ultrachat_200k")
+# ============================================================================
+# 8. TRAINING
+# ============================================================================
 
-# Access the splits
-train_dataset = dataset_ultrachat["train_sft"] 
-eval_dataset = dataset_ultrachat["test_sft"]
+print("\n" + "="*80)
+print("STARTING TRAINING")
+print("="*80)
+print(f"Train dataset size: {len(train_dataset)}")
+print(f"Eval dataset size: {len(eval_dataset)}")
+print(f"Effective batch size: {training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps}")
+print(f"Total training steps: {len(train_dataset) // (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps) * training_args.num_train_epochs}")
+print(f"Quantization: {'4-bit' if bnb_config == bnb_config_4bit else '8-bit' if bnb_config == bnb_config_8bit else 'Full precision'}")
+print(f"Flash Attention 2: Enabled")
+print("="*80 + "\n")
 
-
-
-
-
-#%%
-# Create a chat template
-
-# Code created by Claude. The chat template is based on the Jinja2 template syntax, which is what HuggingFace tokenizers expect for chat templates. A conversation is formatted into a single tokenizable sequence for a given model. https://huggingface.co/docs/transformers/en/chat_templating_writing
-
-chat_template = """
-{% if messages[0]['role'] == 'system' %}
-    {{ '<|im_start|>system\n' + messages[0]['content'] + '<|im_end|>\n' }}
-{% endif %}
-
-{% for message in messages %}
-    {% if message['role'] != 'system' %}
-        {{ '<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>\n' }}
-    {% endif %}
-{% endfor %}
-
-{% if add_generation_prompt %}
-    {{ '<|im_start|>assistant\n' }}
-{% endif %}
-"""
-
-# set the tokenizers chat template to the template we created
-tokenizer.chat_template = chat_template
-# %%
-
-
-# %%
-# Save the resized model
-output_dir = "./mistral-7b-resized"
-
-# Save the model
-model.save_pretrained(output_dir)
+# Train the model
+trainer.train()
