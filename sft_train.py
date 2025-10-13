@@ -12,9 +12,71 @@ from datasets import load_dataset
 model_name = "mistralai/Mistral-7B-v0.1"
 
 #%%
-# 1.  load and inspect the saved custom tokenizer
+# # 1.  load and inspect the saved custom tokenizer
 tokenizer = AutoTokenizer.from_pretrained("./tokenizer_with_specials")
 tokenizer.pad_token
+#%%
+# ============================================================================
+# 1. TOKENIZER SETUP WITH CUSTOM CHAT TEMPLATE
+# ============================================================================
+
+model_name = "mistralai/Mistral-7B-v0.1"
+
+# Load tokenizer
+# tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+# # Add special tokens
+# special_tokens_dict = {
+#     "pad_token": "<|pad|>",
+#     "additional_special_tokens": [
+#         "<|im_start|>",
+#         "<|im_end|>",
+#         "<|endoftext|>"
+#     ]
+# }
+
+# tokenizer.add_special_tokens(special_tokens_dict)
+# tokenizer.padding_side = 'right'
+# tokenizer.add_bos_token = False
+# tokenizer.add_eos_token = False
+
+# Define ChatML template
+chat_template = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'user' %}{{ '<|im_start|>user\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant\n' }}{% generation %}{{ message['content'] }}{% endgeneration %}{{ '<|im_end|>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"""
+
+tokenizer.chat_template = chat_template
+
+print(f"Tokenizer vocabulary size: {len(tokenizer)}")
+print(f"Special tokens added: {tokenizer.all_special_tokens}")
+
+#%%
+# Verify it works
+test_messages = [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi there!"}
+]
+
+result = tokenizer.apply_chat_template(
+    test_messages,
+    tokenize=True,
+    return_assistant_tokens_mask=True,
+    return_dict=True,
+    add_generation_prompt=False
+)
+
+print(f"Result type: {type(result)}")
+if 'assistant_masks' in result:
+    print("✓ Chat template supports assistant_only_loss!")
+    print(f"Input IDs: {result['input_ids']}")
+    print(f"Assistant mask: {result['assistant_masks']}")
+    print(f"\nMask breakdown:")
+    tokens = tokenizer.convert_ids_to_tokens(result['input_ids'])
+    for token, mask in zip(tokens, result['assistant_masks']):
+        indicator = "→ TRAIN" if mask == 1 else ""
+        print(f"  {token:20s} mask={mask} {indicator}")
+else:
+    print("✗ Chat template does NOT support assistant_only_loss")
+
+
 
 #%%
 # define quantization options and configuration
@@ -150,12 +212,13 @@ print(f"Eval dataset size: {len(eval_dataset)}")
 
 # Formatting function to apply chat template
 def formatting_func(example):
-    """Apply chat template to convert messages to formatted text"""
-    return tokenizer.apply_chat_template(
+    """Apply chat template and return dict with input_ids"""
+    text = tokenizer.apply_chat_template(
         example["messages"],
         tokenize=False,
         add_generation_prompt=False
     )
+    return {"text": text}
 
 #%%
 # ============================================================================
@@ -234,16 +297,16 @@ training_args = SFTConfig(
     packing=True,                     # Set True if sequences are short/variable
     
     # RESPONSE MASKING (replaces DataCollatorForCompletionOnlyLM)
-    completion_only_loss=True,         # Only compute loss on completions
-    response_template="<|im_start|>assistant\n",  # Where completions start
+    # completion_only_loss=True,         # Only compute loss on completions
+    # assistant_only_loss=True, 
     
     # Additional SFT configs
     dataset_kwargs={
         "add_special_tokens": False,   # We handle special tokens in template
         "append_concat_token": False,  # Don't add extra tokens
     },
+    
 )
-
 
 
 #%%
@@ -252,17 +315,11 @@ training_args = SFTConfig(
 
 trainer = SFTTrainer(
     model=model,
-    args=training_args,                # SFTConfig with all settings
+    args=training_args,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
-    tokenizer=tokenizer,
-    
-    # Dataset formatting
-    formatting_func=formatting_func,    # Apply chat template on-the-fly
-    
-    # Note: Response masking is now handled by SFTConfig parameters:
-    # - completion_only_loss=True
-    # - response_template="<|im_start|>assistant\n"
+    processing_class=tokenizer,  # Use this parameter name
+    formatting_func=formatting_func,
 )
 
 #%%
