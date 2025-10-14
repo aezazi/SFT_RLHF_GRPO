@@ -194,15 +194,102 @@ eval_dataset = dataset["test_sft"]
 print(f"Train dataset size: {len(train_dataset)}")
 print(f"Eval dataset size: {len(eval_dataset)}")
 
-# Formatting function to apply chat template
+
 def formatting_func(example):
-    """Apply chat template and return dict with input_ids"""
-    text = tokenizer.apply_chat_template(
+    result = tokenizer.apply_chat_template(
         example["messages"],
-        tokenize=False,
+        tokenize=True,
+        return_dict=True,
+        return_assistant_tokens_mask=True,
         add_generation_prompt=False
     )
-    return {"text": text}
+
+    
+
+    input_ids = result["input_ids"]
+    assistant_mask = result["assistant_masks"]
+    labels = [tok if mask else -100 for tok, mask in zip(input_ids, assistant_mask)]
+
+    return {
+        "input_ids": input_ids,
+        "labels": labels,
+    }
+
+
+#%%
+# ---------------------------------------------------------------------
+# 4️⃣ Mock conversation
+# ---------------------------------------------------------------------
+example = {
+    "messages": [
+        {"role": "system", "content": "You are a helpful AI assistant."},
+        {"role": "user", "content": "Hi, can you tell me a joke?"},
+        {"role": "assistant", "content": "Sure! Why did the math book look sad? Because it had too many problems."},
+        {"role": "user", "content": "Haha, another one please!"},
+        {"role": "assistant", "content": "What do you call a fake noodle? An impasta!"},
+    ]
+}
+
+
+# ---------------------------------------------------------------------
+# 5️⃣ Apply formatting_func
+# ---------------------------------------------------------------------
+tokenized = formatting_func(example)
+
+input_ids = tokenized["input_ids"]
+labels = tokenized["labels"]
+
+# ---------------------------------------------------------------------
+# 6️⃣ Decode and visualize which tokens are masked/unmasked
+# ---------------------------------------------------------------------
+decoded_text = tokenizer.decode(input_ids)
+decoded_labels = "".join(
+    [tokenizer.decode([t]) if l != -100 else "█" for t, l in zip(input_ids, labels)]
+)
+
+print("\n=== Full Tokenized Conversation ===")
+print(decoded_text)
+
+print("\n=== Mask Visualization (█ = masked, assistant text = visible) ===")
+print(decoded_labels)
+
+# ---------------------------------------------------------------------
+# 7️⃣ Verify correctness (basic assertion)
+# ---------------------------------------------------------------------
+assert any(l != -100 for l in labels), "No assistant tokens unmasked!"
+assert sum(l != -100 for l in labels) < len(labels), "All tokens unmasked — masking failed!"
+
+print("\n✅ Masking logic works correctly!")
+
+
+#%%
+# #format and store training and eval datasets
+# from datasets import Dataset
+
+# # Apply formatting function to train and eval datasets
+# print("Processing train dataset...")
+# train_dataset_formatted = train_dataset.map(
+#     formatting_func,
+#     batched=False,        # True if your formatting_func can handle batches
+#     remove_columns=train_dataset.column_names  # Keep only tokenized data
+# )
+
+# print("Processing eval dataset...")
+# eval_dataset_formatted = eval_dataset.map(
+#     formatting_func,
+#     batched=False,
+#     remove_columns=eval_dataset.column_names
+# )
+
+# train_dataset_formatted.save_to_disk("./ultrachat_train_formatted")
+# eval_dataset_formatted.save_to_disk("./ultrachat_eval_formatted")
+
+#%%
+# load formatted datasets if already created
+from datasets import load_from_disk
+
+train_dataset_formatted = load_from_disk("./ultrachat_train_formatted")
+eval_dataset_formatted = load_from_disk("./ultrachat_eval_formatted")
 
 #%%
 # ============================================================================
@@ -218,9 +305,9 @@ training_args = SFTConfig(
     logging_dir=f"{output_dir}/logs",
     logging_steps=10,
     logging_strategy="steps",
-    num_train_epochs=3,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
+    num_train_epochs=1,
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=4,
     gradient_accumulation_steps=2,
     learning_rate=2e-4,
     lr_scheduler_type="cosine",
@@ -248,7 +335,7 @@ training_args = SFTConfig(
     dataset_text_field=None,
     max_length=2048,
     packing=True,                        # Set to False if packing issues arise
-    completion_only_loss=True,
+    completion_only_loss=False,
     # response_template="<|im_start|>assistant\n",  # <-- ADD THIS
     dataset_kwargs={
         "add_special_tokens": False,
@@ -264,10 +351,8 @@ training_args = SFTConfig(
 trainer = SFTTrainer(
     model=model,
     args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-    tokenizer=tokenizer,  # Use this parameter name
-    formatting_func=formatting_func,
+    train_dataset=train_dataset_formatted,   # pre-formatted
+    eval_dataset=eval_dataset_formatted,     # pre-formatted
 )
 
 #%%
