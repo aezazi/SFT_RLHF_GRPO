@@ -201,3 +201,102 @@ else:
 # save the customized tokenizer so we don't have to redo all the above if we want to re-use our custom token and chat template
 save_path = "./tokenizer_with_specials"
 tokenizer.save_pretrained(save_path)
+
+#%%
+# ============================================================================
+# 5. LOAD DATASET AND CREATE FUNCTION TO APPLY CHAT TEMPLATE
+# ============================================================================
+
+# Load UltraChat dataset
+dataset = load_dataset("HuggingFaceH4/ultrachat_200k")
+train_dataset = dataset["train_sft"]
+eval_dataset = dataset["test_sft"]
+
+print(f"Train dataset size: {len(train_dataset)}")
+print(f"Eval dataset size: {len(eval_dataset)}")
+
+
+def formatting_func(example):
+    result = tokenizer.apply_chat_template(
+        example["messages"],
+        tokenize=True,
+        return_dict=True,
+        return_assistant_tokens_mask=True,
+        add_generation_prompt=False
+    )
+
+    
+
+    input_ids = result["input_ids"]
+    assistant_mask = result["assistant_masks"]
+    labels = [tok if mask else -100 for tok, mask in zip(input_ids, assistant_mask)]
+
+    return {
+        "input_ids": input_ids,
+        "labels": labels,
+    }
+
+
+#%%
+# ---------------------------------------------------------------------
+# 5.1 Test formatting function
+# ---------------------------------------------------------------------
+
+# Mock conversation
+example = {
+    "messages": [
+        {"role": "system", "content": "You are a helpful AI assistant."},
+        {"role": "user", "content": "Hi, can you tell me a joke?"},
+        {"role": "assistant", "content": "Sure! Why did the math book look sad? Because it had too many problems."},
+        {"role": "user", "content": "Haha, another one please!"},
+        {"role": "assistant", "content": "What do you call a fake noodle? An impasta!"},
+    ]
+}
+
+
+# appply formatting function to example
+tokenized = formatting_func(example)
+input_ids = tokenized["input_ids"]
+labels = tokenized["labels"]
+
+# Decode and visualize which tokens are masked/unmasked
+decoded_text = tokenizer.decode(input_ids)
+decoded_labels = "".join(
+    [tokenizer.decode([t]) if l != -100 else "█" for t, l in zip(input_ids, labels)]
+)
+
+print("\n=== Full Tokenized Conversation ===")
+print(decoded_text)
+
+print("\n=== Mask Visualization (█ = masked, assistant text = visible) ===")
+print(decoded_labels)
+
+# Verify correctness (basic assertion)
+assert any(l != -100 for l in labels), "No assistant tokens unmasked!"
+assert sum(l != -100 for l in labels) < len(labels), "All tokens unmasked — masking failed!"
+
+print("\n✅ Masking logic works correctly!")
+
+#%%
+# format and store training and eval datasets
+from datasets import Dataset
+
+# Apply formatting function to train and eval datasets
+print("Processing train dataset...")
+train_dataset_formatted = train_dataset.map(
+    formatting_func,
+    batched=False,        # True if your formatting_func can handle batches
+    remove_columns=train_dataset.column_names  # Keep only tokenized data
+)
+
+print("Processing eval dataset...")
+eval_dataset_formatted = eval_dataset.map(
+    formatting_func,
+    batched=False,
+    remove_columns=eval_dataset.column_names
+)
+
+train_dataset_formatted.save_to_disk("./ultrachat_train_formatted")
+eval_dataset_formatted.save_to_disk("./ultrachat_eval_formatted")
+
+# %%

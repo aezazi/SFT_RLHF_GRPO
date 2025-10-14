@@ -12,58 +12,31 @@ from datasets import load_dataset
 model_name = "mistralai/Mistral-7B-v0.1"
 
 #%%
-# # 1.  load and inspect the saved custom tokenizer
+#============================================================================
+# 1. LOAD TOKENIZER WE CREATED
+#============================================================================
+
 tokenizer = AutoTokenizer.from_pretrained("./tokenizer_with_specials")
-tokenizer.pad_token
+# inspect special tokens
+print(f"Padding token: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
+print(f"Special tokens: {tokenizer.additional_special_tokens}")
+print(f" <|im_start|> token: {tokenizer.additional_special_tokens[0]}")
+print(f"Tokenizer vocabulary size: {len(tokenizer)}")
+print(f"Special tokens added: {tokenizer.all_special_tokens}")
+
 
 #%%
+# load formatted datasets 
 # ============================================================================
-# 1. TOKENIZER SETUP WITH CUSTOM CHAT TEMPLATE
+# 2. LOAD FORMATTED DATASETS
 # ============================================================================
+from datasets import load_from_disk
 
-model_name = "mistralai/Mistral-7B-v0.1"
-
-
-# Define ChatML template
-chat_template = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'user' %}{{ '<|im_start|>user\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant\n' }}{% generation %}{{ message['content'] }}{% endgeneration %}{{ '<|im_end|>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"""
-
-tokenizer.chat_template = chat_template
-
-
+train_dataset_formatted = load_from_disk("./ultrachat_train_formatted")
+eval_dataset_formatted = load_from_disk("./ultrachat_eval_formatted")
 
 #%%
-# Verify it works
-test_messages = [
-    {"role": "user", "content": "Hello"},
-    {"role": "assistant", "content": "Hi there!"}
-]
-
-result = tokenizer.apply_chat_template(
-    test_messages,
-    tokenize=True,
-    return_assistant_tokens_mask=True,
-    return_dict=True,
-    add_generation_prompt=False
-)
-
-print(f"Result type: {type(result)}")
-if 'assistant_masks' in result:
-    print("✓ Chat template supports assistant_only_loss!")
-    print(f"Input IDs: {result['input_ids']}")
-    print(f"Assistant mask: {result['assistant_masks']}")
-    print(f"\nMask breakdown:")
-    tokens = tokenizer.convert_ids_to_tokens(result['input_ids'])
-    for token, mask in zip(tokens, result['assistant_masks']):
-        indicator = "→ TRAIN" if mask == 1 else ""
-        print(f"  {token:20s} mask={mask} {indicator}")
-else:
-    print("✗ Chat template does NOT support assistant_only_loss")
-
-
-
-#%%
-# define quantization options and configuration
-
+# define quantization options and configuratio
 # ============================================================================
 # 2. QUANTIZATION CONFIGURATION
 # ============================================================================
@@ -147,9 +120,8 @@ else:
 print(f"Model dtype: {model.dtype}")
 
 
-
 # %%
-# ============================================================================
+#=============================================================================
 # 4. LORA CONFIGURATION
 # ============================================================================
 
@@ -179,116 +151,6 @@ trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 all_params = sum(p.numel() for p in model.parameters())
 print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_params:.2f}%)")
 
-
-#%%
-# ============================================================================
-# 5. LOAD DATASET AND CREATE FUNCTION TO APPLY CHAT TEMPLATE
-# ============================================================================
-
-# Load UltraChat dataset
-dataset = load_dataset("HuggingFaceH4/ultrachat_200k")
-train_dataset = dataset["train_sft"]
-eval_dataset = dataset["test_sft"]
-
-print(f"Train dataset size: {len(train_dataset)}")
-print(f"Eval dataset size: {len(eval_dataset)}")
-
-
-def formatting_func(example):
-    result = tokenizer.apply_chat_template(
-        example["messages"],
-        tokenize=True,
-        return_dict=True,
-        return_assistant_tokens_mask=True,
-        add_generation_prompt=False
-    )
-
-    
-
-    input_ids = result["input_ids"]
-    assistant_mask = result["assistant_masks"]
-    labels = [tok if mask else -100 for tok, mask in zip(input_ids, assistant_mask)]
-
-    return {
-        "input_ids": input_ids,
-        "labels": labels,
-    }
-
-
-#%%
-# ---------------------------------------------------------------------
-# 4️⃣ Mock conversation
-# ---------------------------------------------------------------------
-example = {
-    "messages": [
-        {"role": "system", "content": "You are a helpful AI assistant."},
-        {"role": "user", "content": "Hi, can you tell me a joke?"},
-        {"role": "assistant", "content": "Sure! Why did the math book look sad? Because it had too many problems."},
-        {"role": "user", "content": "Haha, another one please!"},
-        {"role": "assistant", "content": "What do you call a fake noodle? An impasta!"},
-    ]
-}
-
-
-# ---------------------------------------------------------------------
-# 5️⃣ Apply formatting_func
-# ---------------------------------------------------------------------
-tokenized = formatting_func(example)
-
-input_ids = tokenized["input_ids"]
-labels = tokenized["labels"]
-
-# ---------------------------------------------------------------------
-# 6️⃣ Decode and visualize which tokens are masked/unmasked
-# ---------------------------------------------------------------------
-decoded_text = tokenizer.decode(input_ids)
-decoded_labels = "".join(
-    [tokenizer.decode([t]) if l != -100 else "█" for t, l in zip(input_ids, labels)]
-)
-
-print("\n=== Full Tokenized Conversation ===")
-print(decoded_text)
-
-print("\n=== Mask Visualization (█ = masked, assistant text = visible) ===")
-print(decoded_labels)
-
-# ---------------------------------------------------------------------
-# 7️⃣ Verify correctness (basic assertion)
-# ---------------------------------------------------------------------
-assert any(l != -100 for l in labels), "No assistant tokens unmasked!"
-assert sum(l != -100 for l in labels) < len(labels), "All tokens unmasked — masking failed!"
-
-print("\n✅ Masking logic works correctly!")
-
-
-#%%
-# #format and store training and eval datasets
-# from datasets import Dataset
-
-# # Apply formatting function to train and eval datasets
-# print("Processing train dataset...")
-# train_dataset_formatted = train_dataset.map(
-#     formatting_func,
-#     batched=False,        # True if your formatting_func can handle batches
-#     remove_columns=train_dataset.column_names  # Keep only tokenized data
-# )
-
-# print("Processing eval dataset...")
-# eval_dataset_formatted = eval_dataset.map(
-#     formatting_func,
-#     batched=False,
-#     remove_columns=eval_dataset.column_names
-# )
-
-# train_dataset_formatted.save_to_disk("./ultrachat_train_formatted")
-# eval_dataset_formatted.save_to_disk("./ultrachat_eval_formatted")
-
-#%%
-# load formatted datasets if already created
-from datasets import load_from_disk
-
-train_dataset_formatted = load_from_disk("./ultrachat_train_formatted")
-eval_dataset_formatted = load_from_disk("./ultrachat_eval_formatted")
 
 #%%
 # ============================================================================
@@ -344,6 +206,8 @@ training_args = SFTConfig(
 
 
 #%%
+# Configure SFT Trainer
+# ============================================================================
 # 7. SFT TRAINER CONFIGURATION
 # ============================================================================
 
@@ -372,7 +236,3 @@ print("="*80 + "\n")
 
 # Train the model
 trainer.train()
-
-#%%
-
-# %%
