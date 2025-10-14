@@ -212,84 +212,48 @@ def formatting_func(example):
 output_dir = "./mistral-7b-ultrachat-sft"
 
 training_args = SFTConfig(
-    # Output and logging
     output_dir=output_dir,
     overwrite_output_dir=True,
-    report_to="tensorboard",            # Change to "wandb" if using Weights & Biases
+    report_to="tensorboard",
     logging_dir=f"{output_dir}/logs",
     logging_steps=10,
     logging_strategy="steps",
-    
-    # Training regime
-    num_train_epochs=3,                 # Number of epochs
-    max_steps=-1,                       # -1 means use num_train_epochs
-    
-    # Batch sizes - Optimized for H200
-    per_device_train_batch_size=8,      # Large batch possible with H200
+    num_train_epochs=3,
+    per_device_train_batch_size=8,
     per_device_eval_batch_size=8,
-    gradient_accumulation_steps=2,      # Effective batch size = 8*2 = 16
-    
-    # Optimization
-    learning_rate=2e-4,                 # Standard for LoRA
-    lr_scheduler_type="cosine",         # Cosine decay with warmup
-    warmup_ratio=0.03,                  # 3% warmup steps
-    weight_decay=0.01,                  # L2 regularization
-    max_grad_norm=1.0,                  # Gradient clipping
-    optim="paged_adamw_8bit",          # Memory-efficient optimizer
-    
-    # Precision
-    bf16=True,                          # Use bfloat16 (H200 supports it)
-    bf16_full_eval=True,               # Use bf16 for evaluation too
-    
-    # Memory optimizations
+    gradient_accumulation_steps=2,
+    learning_rate=2e-4,
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.03,
+    weight_decay=0.01,
+    max_grad_norm=1.0,
+    optim="paged_adamw_8bit",
+    bf16=True,
+    bf16_full_eval=True,
     gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"use_reentrant": False},  # More stable
-    
-    # Evaluation
+    gradient_checkpointing_kwargs={"use_reentrant": False},
     do_eval=True,
-    eval_strategy="epoch",        # Evaluate at end of each epoch
-    eval_steps=None,                    # Not used when strategy="epoch"
-    
-    # Saving
-    save_strategy="epoch",              # Save at end of each epoch
-    save_total_limit=2,                 # Keep only 2 best checkpoints
-    load_best_model_at_end=True,       # Load best model after training
-    metric_for_best_model="eval_loss", # Use eval loss to determine best
-    greater_is_better=False,           # Lower loss is better
-    
-    # Reproducibility
+    eval_strategy="epoch",
+    save_strategy="epoch",
+    save_total_limit=2,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    greater_is_better=False,
     seed=42,
     data_seed=42,
-    
-    # Performance
-    dataloader_num_workers=4,          # Parallel data loading
-    dataloader_pin_memory=True,        # Faster data transfer to GPU
-    
-    # Misc
+    dataloader_num_workers=4,
+    dataloader_pin_memory=True,
     log_level="info",
     disable_tqdm=False,
-    
-    # ========================================================================
-    # SFT-SPECIFIC PARAMETERS (New in SFTConfig)
-    # ========================================================================
-    
-    # Dataset formatting
-    dataset_text_field=None,           # We use formatting_func instead
-    
-    # Sequence handling
-    max_length=2048,               # Maximum sequence length
-    packing=True,                     # Set True if sequences are short/variable
-    
-    # RESPONSE MASKING (replaces DataCollatorForCompletionOnlyLM)
-    # completion_only_loss=True,         # Only compute loss on completions
-    # assistant_only_loss=True, 
-    
-    # Additional SFT configs
+    dataset_text_field=None,
+    max_length=2048,
+    packing=True,                        # Set to False if packing issues arise
+    completion_only_loss=True,
+    # response_template="<|im_start|>assistant\n",  # <-- ADD THIS
     dataset_kwargs={
-        "add_special_tokens": False,   # We handle special tokens in template
-        "append_concat_token": False,  # Don't add extra tokens
+        "add_special_tokens": False,
+        "append_concat_token": False,
     },
-    
 )
 
 
@@ -302,7 +266,7 @@ trainer = SFTTrainer(
     args=training_args,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
-    processing_class=tokenizer,  # Use this parameter name
+    tokenizer=tokenizer,  # Use this parameter name
     formatting_func=formatting_func,
 )
 
