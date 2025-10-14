@@ -29,8 +29,7 @@ chat_template = """{% for message in messages %}{% if message['role'] == 'system
 
 tokenizer.chat_template = chat_template
 
-print(f"Tokenizer vocabulary size: {len(tokenizer)}")
-print(f"Special tokens added: {tokenizer.all_special_tokens}")
+
 
 #%%
 # Verify it works
