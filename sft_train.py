@@ -12,9 +12,8 @@ from datasets import load_dataset
 model_name = "mistralai/Mistral-7B-v0.1"
 
 #%%
-#============================================================================
-# 1. LOAD TOKENIZER WE CREATED
-#============================================================================
+#====================.   1. LOAD TOKENIZER WE CREATED ========================
+#=============================================================================
 
 tokenizer = AutoTokenizer.from_pretrained("./tokenizer_with_specials")
 # inspect special tokens
@@ -27,8 +26,7 @@ print(f"Special tokens added: {tokenizer.all_special_tokens}")
 
 #%%
 # load formatted datasets 
-# ============================================================================
-# 2. LOAD FORMATTED DATASETS
+# ============================ 2. LOAD FORMATTED DATASETS ====================
 # ============================================================================
 from datasets import load_from_disk
 
@@ -121,9 +119,9 @@ print(f"Model dtype: {model.dtype}")
 
 
 # %%
-#=============================================================================
+#==============================================================================
 # 4. LORA CONFIGURATION
-# ============================================================================
+# =============================================================================
 
 peft_config = LoraConfig(
     r=64,                                # LoRA rank (higher = more parameters, better quality)
@@ -207,8 +205,7 @@ training_args = SFTConfig(
 
 #%%
 # Configure SFT Trainer
-# ============================================================================
-# 7. SFT TRAINER CONFIGURATION
+# ======================= 7. SFT TRAINER CONFIGURATION========================
 # ============================================================================
 
 trainer = SFTTrainer(
@@ -218,21 +215,80 @@ trainer = SFTTrainer(
     eval_dataset=eval_dataset_formatted,     # pre-formatted
 )
 
+
 #%%
-# ============================================================================
-# 8. TRAINING
-# ============================================================================
+from transformers import TrainerCallback
+import time
+import torch
+import torch.distributed as dist
 
-print("\n" + "="*80)
-print("STARTING TRAINING")
-print("="*80)
-print(f"Train dataset size: {len(train_dataset)}")
-print(f"Eval dataset size: {len(eval_dataset)}")
-print(f"Effective batch size: {training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps}")
-print(f"Total training steps: {len(train_dataset) // (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps) * training_args.num_train_epochs}")
-print(f"Quantization: {'4-bit' if bnb_config == bnb_config_4bit else '8-bit' if bnb_config == bnb_config_8bit else 'Full precision'}")
-print(f"Flash Attention 2: Enabled")
-print("="*80 + "\n")
+class VerboseTrainingCallback(TrainerCallback):
+    """Logs loss, LR, GPU memory, and estimated throughput (tokens/sec) across all GPUs."""
 
+    def __init__(self):
+        self.last_time = None
+        self.last_step = 0
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None:
+            return
+
+        step = state.global_step
+        loss = logs.get("loss", None)
+        lr = logs.get("learning_rate", None)
+
+        # --- Get distributed info ---
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        rank = dist.get_rank() if dist.is_initialized() else 0
+
+        # --- Estimate tokens/sec ---
+        batch_size = args.per_device_train_batch_size
+        seq_len = getattr(args, "max_seq_length", 1024)  # fallback if not defined
+        grad_accum = args.gradient_accumulation_steps
+
+        # Global effective batch (across GPUs)
+        global_batch = batch_size * world_size * grad_accum
+
+        # Time tracking
+        now = time.time()
+        tokens_per_sec = None
+        if self.last_time is not None:
+            elapsed = now - self.last_time
+            steps_since = step - self.last_step
+            if elapsed > 0:
+                approx_tokens_per_step = global_batch * seq_len
+                tokens_per_sec = (approx_tokens_per_step * steps_since) / elapsed
+
+        self.last_time = now
+        self.last_step = step
+
+        # --- GPU memory stats (only print from rank 0) ---
+        if torch.cuda.is_available():
+            mem_allocated = torch.cuda.memory_allocated() / 1e9
+            mem_reserved = torch.cuda.memory_reserved() / 1e9
+            total_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
+            mem_free = total_mem - mem_allocated
+        else:
+            mem_allocated = mem_reserved = mem_free = 0
+
+        # --- Build log string ---
+        if rank == 0:  # only main process prints
+            log_str = f"[Step {step}]"
+            if loss is not None:
+                log_str += f" loss={loss:.4f}"
+            if lr is not None:
+                log_str += f" lr={lr:.6e}"
+            if tokens_per_sec is not None:
+                log_str += f" | throughput≈{tokens_per_sec:,.0f} tok/s (total)"
+            log_str += f" | GPU mem: {mem_allocated:.2f}G alloc / {mem_reserved:.2f}G reserved / {mem_free:.2f}G free"
+            print(log_str, flush=True)
+
+trainer.add_callback(VerboseTrainingCallback())
+
+#%%
+#=========================== 8. TRAINING ====================================
+#============================================================================
 # Train the model
 trainer.train()
+
+# %%
