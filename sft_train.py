@@ -15,6 +15,7 @@ model_name = "mistralai/Mistral-7B-v0.1"
 # # 1.  load and inspect the saved custom tokenizer
 tokenizer = AutoTokenizer.from_pretrained("./tokenizer_with_specials")
 tokenizer.pad_token
+
 #%%
 # ============================================================================
 # 1. TOKENIZER SETUP WITH CUSTOM CHAT TEMPLATE
@@ -22,23 +23,6 @@ tokenizer.pad_token
 
 model_name = "mistralai/Mistral-7B-v0.1"
 
-# Load tokenizer
-# tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-# # Add special tokens
-# special_tokens_dict = {
-#     "pad_token": "<|pad|>",
-#     "additional_special_tokens": [
-#         "<|im_start|>",
-#         "<|im_end|>",
-#         "<|endoftext|>"
-#     ]
-# }
-
-# tokenizer.add_special_tokens(special_tokens_dict)
-# tokenizer.padding_side = 'right'
-# tokenizer.add_bos_token = False
-# tokenizer.add_eos_token = False
 
 # Define ChatML template
 chat_template = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'user' %}{{ '<|im_start|>user\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant\n' }}{% generation %}{{ message['content'] }}{% endgeneration %}{{ '<|im_end|>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"""
