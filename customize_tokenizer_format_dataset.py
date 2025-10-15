@@ -27,7 +27,7 @@ print(f"Your API Key: {hf_token}")
 login(token=hf_token)
 
 #%%
-# load the model 
+# load the model and tokenizer
 model_name = "mistralai/Mistral-7B-v0.1"
 model = AutoModelForCausalLM.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -151,7 +151,7 @@ special_tokens_dict = {
 tokenizer.add_special_tokens(special_tokens_dict)
 tokenizer.padding_side = 'right' # Set padding side to right (standard for dedicated pad token)
 
-# Assign my custom tokens as the tokenizers eos and bos tokens. Disable automatic insertion of eos and bos tokens since our custom chat template does this:
+# Assign my custom tokens as the tokenizer's eos and bos tokens. Disable automatic insertion of eos and bos tokens since our custom chat template does this. Resize the model's embedding space to accommodate the tokens we added:
 # 1. Define which tokens serve as BOS/EOS (needed for model.generate)
 tokenizer.bos_token = "<|im_start|>"
 tokenizer.eos_token = "<|endoftext|>"
@@ -174,17 +174,9 @@ print(f" <|im_start|> token: {tokenizer.additional_special_tokens[0]}")
 print(f"Tokenizer vocabulary size: {len(tokenizer)}")
 print(f"Special tokens added: {tokenizer.all_special_tokens}")
 
-# %%
-# test the tokenizer
-test_text = ['these are very dark and awful days.  I fear things will get much worse.', 'Who knows what will happen']
-
-tokenized = tokenizer(test_text)
-print(type(tokenized))
-print(tokenized)
-tokenizer.decode(tokenized['input_ids'][0])
 
 #%%
-# Define ChatML template with non-assisstant masking
+# Define ChatML template with non-assistant masking
 
 chat_template = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'user' %}{{ '<|im_start|>user\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant\n' }}{% generation %}{{ message['content'] }}{% endgeneration %}{{ '<|im_end|>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"""
 
@@ -221,7 +213,7 @@ else:
 
 
 #%%
-# 5.CREATE FUNCTION TO APPLY CHAT TEMPLATE
+# Create function apply chat template to datasets
 
 def formatting_func(example):
     result = tokenizer.apply_chat_template(
@@ -242,9 +234,7 @@ def formatting_func(example):
     }
 
 #%%
-# ---------------------------------------------------------------------
-# 5.1 Test formatting function
-# ---------------------------------------------------------------------
+# test the formatting function
 
 # Mock conversation
 example = {
@@ -282,9 +272,6 @@ assert sum(l != -100 for l in labels) < len(labels), "All tokens unmasked — ma
 print("\n✅ Masking logic works correctly!")
 
 #%%
-# format and store training and eval datasets
-from datasets import Dataset
-
 # Apply formatting function to train and eval datasets
 print("Processing train dataset...")
 dataset_train_formatted = dataset_train.map(
@@ -304,12 +291,13 @@ dataset_train_formatted.save_to_disk("./ultrachat_train_formatted")
 dataset_eval_formatted.save_to_disk("./ultrachat_eval_formatted")
 
 #%%
-# save the customized tokenizer so we don't have to redo all the above if we want to re-use our custom token and chat template
+# save the customized model and tokenizer so we don't have to redo all the above if we want to re-use our custom token and chat template
 save_path_tok = "./tokenizer_with_specials"
 save_path_mod = "./model_with_specials"
 tokenizer.save_pretrained(save_path_tok)
 model.save_pretrained(save_path_mod)
 
 # %%
+# test load the saved model
 test_load = AutoModelForCausalLM.from_pretrained("./model_with_specials")
 # %%

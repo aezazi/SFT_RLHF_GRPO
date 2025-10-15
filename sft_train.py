@@ -9,13 +9,14 @@ from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 
-model_name = "mistralai/Mistral-7B-v0.1"
+model_name = "model_with_specials"
 
 #%%
 #====================  1. LOAD SAVED MODEL AND TOKENIZER =====================
 #=============================================================================
 
-tokenizer = AutoTokenizer.from_pretrained("./tokenizer_with_specials")
+tokenizer = AutoTokenizer.from_pretrained("tokenizer_with_specials")
+test_load = AutoModelForCausalLM.from_pretrained("model_with_specials")
 # inspect special tokens
 print(f"Padding token: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
 print(f"Special tokens: {tokenizer.additional_special_tokens}")
@@ -34,7 +35,6 @@ train_dataset_formatted = load_from_disk("./ultrachat_train_formatted")
 eval_dataset_formatted = load_from_disk("./ultrachat_eval_formatted")
 
 #%%
-# define quantization options and configuratio
 # ====================== 3. QUANTIZATION CONFIGURATION =======================
 # ============================================================================
 
@@ -67,8 +67,8 @@ bnb_config_8bit = BitsAndBytesConfig(
 bnb_config_full = None  # Don't pass quantization_config to from_pretrained
 
 
-# bnb_config = bnb_config_4bit    # Fast, efficient (recommended for starting)
-bnb_config = bnb_config_8bit  # Better quality (recommended for H200)
+bnb_config = bnb_config_4bit    # Fast, efficient (recommended for starting)
+# bnb_config = bnb_config_8bit  # Better quality (recommended for H200)
 # bnb_config = None             # Full precision (best quality, H200 can handle it)
 
 # For quantized models (4-bit or 8-bit)
@@ -152,53 +152,7 @@ print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_pa
 # ==== 5. TRAINING CONFIGURATION (SFTConfig replaces TrainingArguments) ======
 # ============================================================================
 
-output_dir = "./mistral-7b-ultrachat-sft"
-
-# training_args = SFTConfig(
-#     output_dir=output_dir,
-#     overwrite_output_dir=True,
-#     report_to="tensorboard",
-#     logging_dir=f"{output_dir}/logs",
-#     logging_steps=10,
-#     logging_strategy="steps",
-#     num_train_epochs=1,
-#     per_device_train_batch_size=4,
-#     per_device_eval_batch_size=4,
-#     gradient_accumulation_steps=2,
-#     learning_rate=2e-4,
-#     lr_scheduler_type="cosine",
-#     warmup_ratio=0.03,
-#     weight_decay=0.01,
-#     max_grad_norm=1.0,
-#     optim="paged_adamw_8bit",
-#     bf16=True,
-#     bf16_full_eval=True,
-#     gradient_checkpointing=True,
-#     gradient_checkpointing_kwargs={"use_reentrant": False},
-#     do_eval=True,
-#     eval_strategy="epoch",
-#     save_strategy="epoch",
-#     save_total_limit=2,
-#     load_best_model_at_end=True,
-#     metric_for_best_model="eval_loss",
-#     greater_is_better=False,
-#     seed=42,
-#     data_seed=42,
-#     dataloader_num_workers=4,
-#     dataloader_pin_memory=True,
-#     log_level="info",
-#     disable_tqdm=False,
-#     dataset_text_field=None,
-#     max_length=2048,
-#     packing=True,                        # Set to False if packing issues arise
-#     completion_only_loss=False,
-#     # response_template="<|im_start|>assistant\n",  # <-- ADD THIS
-#     dataset_kwargs={
-#         "add_special_tokens": False,
-#         "append_concat_token": False,
-#     },
-# )
-
+output_dir = "./model_logs"
 
 training_args = SFTConfig(
     # -------------------------
@@ -299,6 +253,7 @@ training_args = SFTConfig(
 
 trainer = SFTTrainer(
     model=model,
+    processing_class=tokenizer,
     args=training_args,
     train_dataset=train_dataset_formatted,   # pre-formatted
     eval_dataset=eval_dataset_formatted,     # pre-formatted
@@ -380,6 +335,9 @@ trainer.add_callback(VerboseTrainingCallback())
 #=========================== 9. TRAINING ====================================
 #============================================================================
 # Train the model
+torch.cuda.empty_cache()
+torch.cuda.reset_peak_memory_stats()
+
 trainer.train()
 
 # %%
