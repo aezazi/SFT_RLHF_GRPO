@@ -174,16 +174,17 @@ training_args = SFTConfig(
     # -------------------------
     # Batch Sizes - Optimized for H200
     # -------------------------
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
-    gradient_accumulation_steps=2,     # Effective batch size = 16
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=4,
+    gradient_accumulation_steps=8,     # Effective batch size = 32
 
     # -------------------------
     # Optimization
     # -------------------------
     learning_rate=2e-4,
     lr_scheduler_type="cosine",
-    warmup_ratio=0.03,
+    # warmup_ratio=0.01,
+    warmup_steps=100
     weight_decay=0.01,
     max_grad_norm=1.0,
     optim="paged_adamw_8bit",
@@ -233,7 +234,7 @@ training_args = SFTConfig(
     # -------------------------
     # Sequence handling
     max_length=2048,
-    packing=True,                       # keeps sequences contiguous in memory
+    packing=False,                       # keeps sequences contiguous in memory
 
     # Masking - since dataset already has assistant-only masks
     completion_only_loss=False,          # <-- important
