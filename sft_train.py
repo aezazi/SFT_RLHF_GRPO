@@ -12,7 +12,7 @@ from datasets import load_dataset
 model_name = "mistralai/Mistral-7B-v0.1"
 
 #%%
-#====================.   1. LOAD TOKENIZER WE CREATED ========================
+#====================  1. LOAD SAVED MODEL AND TOKENIZER =====================
 #=============================================================================
 
 tokenizer = AutoTokenizer.from_pretrained("./tokenizer_with_specials")
@@ -26,7 +26,7 @@ print(f"Special tokens added: {tokenizer.all_special_tokens}")
 
 #%%
 # load formatted datasets 
-# ============================ 2. LOAD FORMATTED DATASETS ====================
+# ===================== 2. LOAD FORMATTED DATASETS ===========================
 # ============================================================================
 from datasets import load_from_disk
 
@@ -35,8 +35,7 @@ eval_dataset_formatted = load_from_disk("./ultrachat_eval_formatted")
 
 #%%
 # define quantization options and configuratio
-# ============================================================================
-# 2. QUANTIZATION CONFIGURATION
+# ====================== 3. QUANTIZATION CONFIGURATION =======================
 # ============================================================================
 
 # OPTION 1: 4-bit Quantization (~3.5GB VRAM for model)
@@ -119,9 +118,8 @@ print(f"Model dtype: {model.dtype}")
 
 
 # %%
-#==============================================================================
-# 4. LORA CONFIGURATION
-# =============================================================================
+#===================== 4. LORA CONFIGURATION ================================
+#=============================================================================
 
 peft_config = LoraConfig(
     r=64,                                # LoRA rank (higher = more parameters, better quality)
@@ -151,33 +149,109 @@ print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_pa
 
 
 #%%
-# ============================================================================
-# 6. TRAINING CONFIGURATION (SFTConfig replaces TrainingArguments)
+# ==== 5. TRAINING CONFIGURATION (SFTConfig replaces TrainingArguments) ======
 # ============================================================================
 
 output_dir = "./mistral-7b-ultrachat-sft"
 
+# training_args = SFTConfig(
+#     output_dir=output_dir,
+#     overwrite_output_dir=True,
+#     report_to="tensorboard",
+#     logging_dir=f"{output_dir}/logs",
+#     logging_steps=10,
+#     logging_strategy="steps",
+#     num_train_epochs=1,
+#     per_device_train_batch_size=4,
+#     per_device_eval_batch_size=4,
+#     gradient_accumulation_steps=2,
+#     learning_rate=2e-4,
+#     lr_scheduler_type="cosine",
+#     warmup_ratio=0.03,
+#     weight_decay=0.01,
+#     max_grad_norm=1.0,
+#     optim="paged_adamw_8bit",
+#     bf16=True,
+#     bf16_full_eval=True,
+#     gradient_checkpointing=True,
+#     gradient_checkpointing_kwargs={"use_reentrant": False},
+#     do_eval=True,
+#     eval_strategy="epoch",
+#     save_strategy="epoch",
+#     save_total_limit=2,
+#     load_best_model_at_end=True,
+#     metric_for_best_model="eval_loss",
+#     greater_is_better=False,
+#     seed=42,
+#     data_seed=42,
+#     dataloader_num_workers=4,
+#     dataloader_pin_memory=True,
+#     log_level="info",
+#     disable_tqdm=False,
+#     dataset_text_field=None,
+#     max_length=2048,
+#     packing=True,                        # Set to False if packing issues arise
+#     completion_only_loss=False,
+#     # response_template="<|im_start|>assistant\n",  # <-- ADD THIS
+#     dataset_kwargs={
+#         "add_special_tokens": False,
+#         "append_concat_token": False,
+#     },
+# )
+
+
 training_args = SFTConfig(
+    # -------------------------
+    # Output and Logging
+    # -------------------------
     output_dir=output_dir,
     overwrite_output_dir=True,
-    report_to="tensorboard",
+    report_to="tensorboard",           # optional: "wandb" if you prefer
     logging_dir=f"{output_dir}/logs",
     logging_steps=10,
     logging_strategy="steps",
-    num_train_epochs=1,
-    per_device_train_batch_size=4,
-    per_device_eval_batch_size=4,
-    gradient_accumulation_steps=2,
+
+    # -------------------------
+    # Training Regime
+    # -------------------------
+    num_train_epochs=3,
+    max_steps=-1,                       # use num_train_epochs
+
+    # -------------------------
+    # Batch Sizes - Optimized for H200
+    # -------------------------
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    gradient_accumulation_steps=2,     # Effective batch size = 16
+
+    # -------------------------
+    # Optimization
+    # -------------------------
     learning_rate=2e-4,
     lr_scheduler_type="cosine",
     warmup_ratio=0.03,
     weight_decay=0.01,
     max_grad_norm=1.0,
     optim="paged_adamw_8bit",
+
+    # -------------------------
+    # Precision
+    # -------------------------
     bf16=True,
     bf16_full_eval=True,
+
+    # -------------------------
+    # Memory Optimizations
+    # -------------------------
     gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"use_reentrant": False},
+    gradient_checkpointing_kwargs={"use_reentrant": False},  # more stable
+    # Optional: activation offloading if needed
+    # activation_offloading=True,  
+    # activation_offloading_params={"device": "cpu"},
+
+    # -------------------------
+    # Evaluation
+    # -------------------------
     do_eval=True,
     eval_strategy="epoch",
     save_strategy="epoch",
@@ -185,27 +259,42 @@ training_args = SFTConfig(
     load_best_model_at_end=True,
     metric_for_best_model="eval_loss",
     greater_is_better=False,
+
+    # -------------------------
+    # Reproducibility
+    # -------------------------
     seed=42,
     data_seed=42,
+
+    # -------------------------
+    # Performance
+    # -------------------------
     dataloader_num_workers=4,
     dataloader_pin_memory=True,
     log_level="info",
     disable_tqdm=False,
-    dataset_text_field=None,
+
+    # -------------------------
+    # SFT-Specific Parameters
+    # -------------------------
+    # Sequence handling
     max_length=2048,
-    packing=True,                        # Set to False if packing issues arise
-    completion_only_loss=False,
-    # response_template="<|im_start|>assistant\n",  # <-- ADD THIS
+    packing=True,                       # keeps sequences contiguous in memory
+
+    # Masking - since dataset already has assistant-only masks
+    completion_only_loss=False,          # <-- important
+    # assistant_only_loss=False,         # optional, can remain False
+    dataset_text_field=None,             # not used, pre-formatted dataset
+
+    # Additional dataset kwargs
     dataset_kwargs={
-        "add_special_tokens": False,
+        "add_special_tokens": False,    # handled in your tokenizer
         "append_concat_token": False,
     },
 )
 
-
 #%%
-# Configure SFT Trainer
-# ======================= 7. SFT TRAINER CONFIGURATION========================
+# ======================= 7. SFT TRAINER CONFIGURATION =======================
 # ============================================================================
 
 trainer = SFTTrainer(
@@ -217,6 +306,8 @@ trainer = SFTTrainer(
 
 
 #%%
+#=========================== 8. LOGGING UTILITY  =============================
+#===========================================================================
 from transformers import TrainerCallback
 import time
 import torch
@@ -286,7 +377,7 @@ class VerboseTrainingCallback(TrainerCallback):
 trainer.add_callback(VerboseTrainingCallback())
 
 #%%
-#=========================== 8. TRAINING ====================================
+#=========================== 9. TRAINING ====================================
 #============================================================================
 # Train the model
 trainer.train()

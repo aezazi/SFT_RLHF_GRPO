@@ -22,20 +22,8 @@
       "single_word": false
     }
   ],
-  "bos_token": {
-    "content": "<s>",
-    "lstrip": false,
-    "normalized": false,
-    "rstrip": false,
-    "single_word": false
-  },
-  "eos_token": {
-    "content": "</s>",
-    "lstrip": false,
-    "normalized": false,
-    "rstrip": false,
-    "single_word": false
-  },
+  "bos_token": "<|im_start|>",
+  "eos_token": "<|endoftext|>",
   "pad_token": {
     "content": "<|pad|>",
     "lstrip": false,
