@@ -301,3 +301,19 @@ model.save_pretrained(save_path_mod)
 # test load the saved model
 test_load = AutoModelForCausalLM.from_pretrained("./model_with_specials")
 # %%
+from datasets import load_from_disk
+test_load_train_dataset_formatted = load_from_disk("./ultrachat_train_formatted")
+import numpy as np
+
+test_load_train_dataset_formatted.column_names
+
+
+
+lengths = [len(example['input_ids']) for example in test_load_train_dataset_formatted]
+print(f"Mean length: {np.mean(lengths):.0f}")
+print(f"Median length: {np.median(lengths):.0f}")
+print(f"95th percentile: {np.percentile(lengths, 95):.0f}")
+print(f"99th percentile: {np.percentile(lengths, 99):.0f}")
+print(f"Max length: {np.max(lengths)}")
+print(f"% over 2048: {100 * np.mean(np.array(lengths) > 2048):.1f}%")
+# %%
