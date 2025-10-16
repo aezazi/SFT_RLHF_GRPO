@@ -9,7 +9,7 @@ from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 
-model_name = "mistralai/Mistral-7B-v0.1"
+model_name = "model_with_specials"
 
 #%%
 #====================  1. LOAD SAVED MODEL AND TOKENIZER =====================
@@ -97,7 +97,7 @@ if bnb_config is not None:
     )
     
     # Resize embeddings to accommodate new tokens
-    model.resize_token_embeddings(len(tokenizer))
+    # model.resize_token_embeddings(len(tokenizer))
     
     # Prepare model for k-bit training (enables gradient checkpointing, etc.)
     model = prepare_model_for_kbit_training(
@@ -121,7 +121,7 @@ else:
     )
     
     # Resize embeddings to accommodate new tokens
-    model.resize_token_embeddings(len(tokenizer))
+    # model.resize_token_embeddings(len(tokenizer))
     
     # Enable gradient checkpointing for memory efficiency
     model.gradient_checkpointing_enable()
@@ -193,14 +193,14 @@ training_args = SFTConfig(
     # -------------------------
     # Batch Sizes - Optimized for H200
     # -------------------------
-    per_device_train_batch_size=4,
-    per_device_eval_batch_size=4,
-    gradient_accumulation_steps=8,     # Effective batch size = 32
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,
+    gradient_accumulation_steps=2,     # Effective batch size = 32
 
     # -------------------------
     # Optimization
     # -------------------------
-    learning_rate=7e-4,
+    learning_rate=2e-4,
     lr_scheduler_type="cosine",
     # warmup_ratio=0.01,
     warmup_steps=100,
@@ -299,11 +299,43 @@ import torch
 import torch.distributed as dist
 
 class VerboseTrainingCallback(TrainerCallback):
-    """Logs loss, LR, GPU memory, and estimated throughput (tokens/sec) across all GPUs."""
+    """
+    Enhanced training logger that tracks:
+    - Loss and learning rate
+    - Training progress (steps, epochs, warmup status)
+    - GPU memory usage
+    - Throughput (tokens/sec)
+    - Moving average loss for trend detection
+    """
 
-    def __init__(self):
+    def __init__(self, trainer=None):
         self.last_time = None
         self.last_step = 0
+        self.trainer = trainer
+        self.loss_history = []
+        self.start_time = time.time()
+        
+    def on_train_begin(self, args, state, control, **kwargs):
+        """Calculate total training steps at the start."""
+        if self.trainer is not None:
+            steps_per_epoch = len(self.trainer.get_train_dataloader()) // args.gradient_accumulation_steps
+            self.total_steps = steps_per_epoch * args.num_train_epochs
+            self.warmup_steps = int(args.warmup_ratio * self.total_steps) if hasattr(args, 'warmup_ratio') and args.warmup_ratio else args.warmup_steps
+        else:
+            # Fallback calculation
+            self.total_steps = state.max_steps if state.max_steps > 0 else 10000
+            self.warmup_steps = getattr(args, 'warmup_steps', 100)
+        
+        print("\n" + "="*70)
+        print(f"Training Configuration:")
+        print(f"  Total steps: {self.total_steps:,}")
+        print(f"  Warmup steps: {self.warmup_steps:,}")
+        print(f"  Epochs: {args.num_train_epochs}")
+        print(f"  Batch size per device: {args.per_device_train_batch_size}")
+        print(f"  Gradient accumulation: {args.gradient_accumulation_steps}")
+        print(f"  Effective batch size: {args.per_device_train_batch_size * args.gradient_accumulation_steps}")
+        print(f"  Learning rate: {args.learning_rate:.2e}")
+        print("="*70 + "\n")
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is None:
@@ -313,13 +345,20 @@ class VerboseTrainingCallback(TrainerCallback):
         loss = logs.get("loss", None)
         lr = logs.get("learning_rate", None)
 
+        # Track loss history for moving average
+        if loss is not None:
+            self.loss_history.append(loss)
+            # Keep last 50 losses for moving average
+            if len(self.loss_history) > 50:
+                self.loss_history.pop(0)
+
         # --- Get distributed info ---
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
 
         # --- Estimate tokens/sec ---
         batch_size = args.per_device_train_batch_size
-        seq_len = getattr(args, "max_seq_length", 1024)  # fallback if not defined
+        seq_len = getattr(args, "max_seq_length", 2048)
         grad_accum = args.gradient_accumulation_steps
 
         # Global effective batch (across GPUs)
@@ -349,17 +388,86 @@ class VerboseTrainingCallback(TrainerCallback):
 
         # --- Build log string ---
         if rank == 0:  # only main process prints
-            log_str = f"[Step {step}]"
+            # Progress indicator
+            progress_pct = (step / self.total_steps * 100) if hasattr(self, 'total_steps') else 0
+            log_str = f"[Step {step:>5}"
+            
+            if hasattr(self, 'total_steps'):
+                log_str += f"/{self.total_steps}"
+            
+            log_str += f" ({progress_pct:.1f}%)]"
+            
+            # Warmup indicator
+            if hasattr(self, 'warmup_steps') and step <= self.warmup_steps:
+                warmup_pct = (step / self.warmup_steps * 100)
+                log_str += f" [WARMUP {warmup_pct:.0f}%]"
+            
+            # Loss with moving average
             if loss is not None:
                 log_str += f" loss={loss:.4f}"
+                if len(self.loss_history) >= 10:
+                    avg_loss = sum(self.loss_history[-10:]) / 10
+                    log_str += f" (avg={avg_loss:.4f})"
+            
+            # Learning rate
             if lr is not None:
-                log_str += f" lr={lr:.6e}"
+                log_str += f" lr={lr:.2e}"
+            
+            # Throughput
             if tokens_per_sec is not None:
-                log_str += f" | throughput≈{tokens_per_sec:,.0f} tok/s (total)"
-            log_str += f" | GPU mem: {mem_allocated:.2f}G alloc / {mem_reserved:.2f}G reserved / {mem_free:.2f}G free"
+                log_str += f" | {tokens_per_sec:>6,.0f} tok/s"
+            
+            # GPU memory (compact format)
+            log_str += f" | GPU: {mem_allocated:.1f}G/{total_mem:.0f}G ({mem_allocated/total_mem*100:.0f}%)"
+            
             print(log_str, flush=True)
+    
+    def on_epoch_end(self, args, state, control, **kwargs):
+        """Print summary at end of each epoch."""
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        
+        if rank == 0:
+            elapsed_time = time.time() - self.start_time
+            hours = int(elapsed_time // 3600)
+            minutes = int((elapsed_time % 3600) // 60)
+            
+            print("\n" + "="*70)
+            print(f"Epoch {state.epoch:.0f} Complete!")
+            print(f"  Time elapsed: {hours}h {minutes}m")
+            print(f"  Steps completed: {state.global_step:,}")
+            
+            if len(self.loss_history) >= 10:
+                recent_avg = sum(self.loss_history[-10:]) / 10
+                print(f"  Recent avg loss: {recent_avg:.4f}")
+            
+            if hasattr(state, 'best_metric') and state.best_metric is not None:
+                print(f"  Best eval loss so far: {state.best_metric:.4f}")
+            
+            print("="*70 + "\n")
+    
+    def on_train_end(self, args, state, control, **kwargs):
+        """Print final summary."""
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        
+        if rank == 0:
+            total_time = time.time() - self.start_time
+            hours = int(total_time // 3600)
+            minutes = int((total_time % 3600) // 60)
+            seconds = int(total_time % 60)
+            
+            print("\n" + "="*70)
+            print("🎉 Training Complete!")
+            print(f"  Total time: {hours}h {minutes}m {seconds}s")
+            print(f"  Total steps: {state.global_step:,}")
+            print(f"  Final loss: {self.loss_history[-1]:.4f}" if self.loss_history else "")
+            
+            if hasattr(state, 'best_metric') and state.best_metric is not None:
+                print(f"  Best eval loss: {state.best_metric:.4f}")
+            
+            print("="*70 + "\n")
 
-trainer.add_callback(VerboseTrainingCallback())
+# Pass trainer reference for better step calculations
+trainer.add_callback(VerboseTrainingCallback(trainer=trainer))
 
 #%%
 #=========================== 8. TRAINING ====================================
@@ -370,4 +478,140 @@ torch.cuda.reset_peak_memory_stats()
 
 trainer.train()
 
+# %%
+# ============ DIAGNOSTIC: Verify Gradients Flow ==============
+import numpy as np
+
+print("\n" + "="*60)
+print("DIAGNOSTIC: Checking if model trains properly")
+print("="*60)
+
+# Get a batch
+test_batch = next(iter(trainer.get_train_dataloader()))
+test_batch = {k: v.to(model.device) for k, v in test_batch.items()}
+
+# Forward pass
+model.train()
+outputs = model(**test_batch)
+loss = outputs.loss
+
+print(f"Test forward pass - Loss: {loss.item():.4f}")
+
+# Check if loss is computed correctly
+assert not torch.isnan(loss), "❌ Loss is NaN!"
+assert loss.item() > 0, "❌ Loss is not positive!"
+
+# Backward pass
+loss.backward()
+
+# Check gradients
+grad_norms = []
+for name, param in model.named_parameters():
+    if param.requires_grad and param.grad is not None:
+        grad_norm = param.grad.norm().item()
+        grad_norms.append(grad_norm)
+        if len(grad_norms) <= 3:  # Print first 3
+            print(f"  {name}: grad_norm={grad_norm:.6f}")
+
+if len(grad_norms) == 0:
+    print("❌ NO GRADIENTS! Model is not training!")
+else:
+    print(f"\n✅ Gradients flowing! {len(grad_norms)} parameters have gradients")
+    print(f"   Mean grad norm: {np.mean(grad_norms):.6f}")
+    print(f"   Max grad norm: {np.max(grad_norms):.6f}")
+
+# Clean up
+model.zero_grad()
+print("="*60 + "\n")
+
+# %%
+# ============ CHECK 2: Label Distribution ==============
+print("\n" + "="*60)
+print("DIAGNOSTIC: Checking label distribution in batches")
+print("="*60)
+
+for i, batch in enumerate(trainer.get_train_dataloader()):
+    if i >= 3:  # Check first 3 batches
+        break
+    
+    labels = batch['labels']
+    total_tokens = labels.numel()
+    masked_tokens = (labels == -100).sum().item()
+    trainable_tokens = total_tokens - masked_tokens
+    
+    print(f"\nBatch {i}:")
+    print(f"  Total tokens: {total_tokens}")
+    print(f"  Masked (-100): {masked_tokens} ({100*masked_tokens/total_tokens:.1f}%)")
+    print(f"  Trainable: {trainable_tokens} ({100*trainable_tokens/total_tokens:.1f}%)")
+    
+    if trainable_tokens == 0:
+        print("  ❌ NO TRAINABLE TOKENS IN THIS BATCH!")
+    elif trainable_tokens / total_tokens < 0.05:
+        print("  ⚠️  Very few trainable tokens (< 5%)")
+    else:
+        print("  ✅ Reasonable number of trainable tokens")
+
+print("="*60 + "\n")
+
+# ============ CHECK 3: LoRA Status ==============
+print("\n" + "="*60)
+print("DIAGNOSTIC: Checking LoRA adapter status")
+print("="*60)
+
+model.print_trainable_parameters()
+
+lora_layers = [name for name, _ in model.named_parameters() if 'lora' in name.lower()]
+print(f"\nFound {len(lora_layers)} LoRA parameters")
+
+if len(lora_layers) == 0:
+    print("❌ NO LORA LAYERS FOUND!")
+else:
+    print(f"✅ LoRA is active. Sample layers:")
+    for name in lora_layers[:5]:
+        print(f"  - {name}")
+
+print("="*60 + "\n")
+
+# ============ CHECK 4: Loss Analysis ==============
+print("\n" + "="*60)
+print("DIAGNOSTIC: Analyzing loss computation")
+print("="*60)
+
+test_batch = next(iter(trainer.get_train_dataloader()))
+test_batch = {k: v.to(model.device) for k, v in test_batch.items()}
+
+with torch.no_grad():
+    outputs = model(**test_batch)
+    
+    logits = outputs.logits
+    labels = test_batch['labels']
+    
+    valid_mask = (labels != -100)
+    num_valid = valid_mask.sum().item()
+    
+    print(f"Batch shape: {labels.shape}")
+    print(f"Valid (non-masked) tokens: {num_valid} / {labels.numel()}")
+    print(f"Percentage trainable: {100 * num_valid / labels.numel():.2f}%")
+    
+    if num_valid > 0:
+        valid_logits = logits[valid_mask]
+        valid_labels = labels[valid_mask]
+        
+        predicted_ids = valid_logits.argmax(dim=-1)
+        
+        correct = (predicted_ids == valid_labels).sum().item()
+        accuracy = correct / num_valid
+        
+        print(f"Prediction accuracy: {accuracy:.2%}")
+        print(f"Loss: {outputs.loss.item():.4f}")
+        
+        unique_predictions = torch.unique(predicted_ids)
+        print(f"Unique predicted tokens: {len(unique_predictions)} / {num_valid}")
+        
+        if len(unique_predictions) < 10:
+            print(f"⚠️  Model predicting very few unique tokens: {unique_predictions.tolist()[:20]}")
+    else:
+        print("❌ No valid tokens to train on!")
+
+print("="*60 + "\n")
 # %%
