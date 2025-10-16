@@ -80,9 +80,9 @@ bnb_config_8bit = BitsAndBytesConfig(
 bnb_config_full = None  # Don't pass quantization_config to from_pretrained
 
 
-bnb_config = bnb_config_4bit    # Fast, efficient (recommended for starting)
+# bnb_config = bnb_config_4bit    # Fast, efficient (recommended for starting)
 # bnb_config = bnb_config_8bit  # Better quality (recommended for H200)
-# bnb_config = None             # Full precision (best quality, H200 can handle it)
+bnb_config = None             # Full precision (best quality, H200 can handle it)
 
 # For quantized models (4-bit or 8-bit)
 if bnb_config is not None:
@@ -93,7 +93,7 @@ if bnb_config is not None:
         trust_remote_code=True,
         attn_implementation="flash_attention_2",  # Enable Flash Attention 2
         dtype=torch.bfloat16,          # Use bf16 for non-quantized layers
-        device_map="auto"
+        
     )
     
     # Resize embeddings to accommodate new tokens
@@ -200,7 +200,7 @@ training_args = SFTConfig(
     # -------------------------
     # Optimization
     # -------------------------
-    learning_rate=2e-4,
+    learning_rate=7e-4,
     lr_scheduler_type="cosine",
     # warmup_ratio=0.01,
     warmup_steps=100,
@@ -282,6 +282,7 @@ trainer = SFTTrainer(
 
 
 #%%
+# params check
 for n, p in model.named_parameters():
     if p.requires_grad:
         print("First trainable param:", n, p.shape)
