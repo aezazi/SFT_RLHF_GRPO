@@ -308,7 +308,7 @@ import numpy as np
 test_load_train_dataset_formatted.column_names
 
 
-
+#%%
 lengths = [len(example['input_ids']) for example in test_load_train_dataset_formatted]
 print(f"Mean length: {np.mean(lengths):.0f}")
 print(f"Median length: {np.median(lengths):.0f}")
