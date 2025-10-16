@@ -9,14 +9,14 @@ from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 
-model_name = "model_with_specials"
+model_name = "mistralai/Mistral-7B-v0.1"
 
 #%%
 #====================  1. LOAD SAVED MODEL AND TOKENIZER =====================
 #=============================================================================
 
 tokenizer = AutoTokenizer.from_pretrained("tokenizer_with_specials")
-test_load = AutoModelForCausalLM.from_pretrained("model_with_specials")
+# test_load = AutoModelForCausalLM.from_pretrained("model_with_specials")
 # inspect special tokens
 print(f"Padding token: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
 print(f"Special tokens: {tokenizer.additional_special_tokens}")
@@ -25,14 +25,27 @@ print(f"Tokenizer vocabulary size: {len(tokenizer)}")
 print(f"Special tokens added: {tokenizer.all_special_tokens}")
 
 
-#%%
-# load formatted datasets 
+#%% 
 # ===================== 2. LOAD FORMATTED DATASETS ===========================
 # ============================================================================
 from datasets import load_from_disk
 
 train_dataset_formatted = load_from_disk("./ultrachat_train_formatted")
 eval_dataset_formatted = load_from_disk("./ultrachat_eval_formatted")
+
+#%%
+sample = train_dataset_formatted[0]
+print(tokenizer.decode(sample["input_ids"]))
+print(sample.keys())
+print(f"Labels unique IDs: {set(sample['labels'])}")
+
+ids = sample["input_ids"]
+labels = sample["labels"]
+
+for i, (tid, lbl) in enumerate(zip(ids, labels)):
+    if lbl != -100:
+        print(f"First unmasked label at position {i}: token_id={tid}, token={tokenizer.decode([tid])}")
+        break
 
 #%%
 # ====================== 3. QUANTIZATION CONFIGURATION =======================
@@ -80,6 +93,7 @@ if bnb_config is not None:
         trust_remote_code=True,
         attn_implementation="flash_attention_2",  # Enable Flash Attention 2
         dtype=torch.bfloat16,          # Use bf16 for non-quantized layers
+        device_map="auto"
     )
     
     # Resize embeddings to accommodate new tokens
@@ -148,9 +162,14 @@ all_params = sum(p.numel() for p in model.parameters())
 print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_params:.2f}%)")
 
 
+
 #%%
 # ==== 5. TRAINING CONFIGURATION (SFTConfig replaces TrainingArguments) ======
 # ============================================================================
+
+# instantiate custom data collator to handle dynamic padding
+import dynamic_padding_util
+data_collator = dynamic_padding_util.DataCollatorForCompletionOnlyLM(tokenizer=tokenizer)
 
 output_dir = "./model_logs"
 
@@ -233,7 +252,7 @@ training_args = SFTConfig(
     # SFT-Specific Parameters
     # -------------------------
     # Sequence handling
-    max_length=2048,
+    max_length=8192,
     packing=False,                       # keeps sequences contiguous in memory
 
     # Masking - since dataset already has assistant-only masks
@@ -249,7 +268,7 @@ training_args = SFTConfig(
 )
 
 #%%
-# ======================= 7. SFT TRAINER CONFIGURATION =======================
+# ======================= 6. SFT TRAINER CONFIGURATION =======================
 # ============================================================================
 
 trainer = SFTTrainer(
@@ -258,11 +277,20 @@ trainer = SFTTrainer(
     args=training_args,
     train_dataset=train_dataset_formatted,   # pre-formatted
     eval_dataset=eval_dataset_formatted,     # pre-formatted
+    data_collator=data_collator,
 )
 
 
 #%%
-#=========================== 8. LOGGING UTILITY  =============================
+for n, p in model.named_parameters():
+    if p.requires_grad:
+        print("First trainable param:", n, p.shape)
+        break
+
+model.print_trainable_parameters()
+
+#%%
+#=========================== 7. LOGGING UTILITY  =============================
 #===========================================================================
 from transformers import TrainerCallback
 import time
@@ -333,7 +361,7 @@ class VerboseTrainingCallback(TrainerCallback):
 trainer.add_callback(VerboseTrainingCallback())
 
 #%%
-#=========================== 9. TRAINING ====================================
+#=========================== 8. TRAINING ====================================
 #============================================================================
 # Train the model
 torch.cuda.empty_cache()
