@@ -164,7 +164,7 @@ print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_pa
 
 
 #%%
-# ==== 5. TRAINING CONFIGURATION (SFTConfig replaces TrainingArguments) ======
+# ========================= 5. SET TRAINING PARAMETERS  ======================
 # ============================================================================
 
 # instantiate custom data collator to handle dynamic padding
@@ -193,8 +193,8 @@ training_args = SFTConfig(
     # -------------------------
     # Batch Sizes - Optimized for H200
     # -------------------------
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,
+    per_device_train_batch_size=20,
+    per_device_eval_batch_size=20,
     gradient_accumulation_steps=2,     # Effective batch size = 32
 
     # -------------------------
@@ -213,7 +213,7 @@ training_args = SFTConfig(
     # -------------------------
     bf16=True,
     bf16_full_eval=True,
-    tf32=True
+    tf32=True,
 
     # -------------------------
     # Memory Optimizations
@@ -254,7 +254,7 @@ training_args = SFTConfig(
     # SFT-Specific Parameters
     # -------------------------
     # Sequence handling
-    max_seq_length=8192, 
+    max_length=8192, 
     packing=False,                       # keeps sequences contiguous in memory
 
     # Masking - since dataset already has assistant-only masks
