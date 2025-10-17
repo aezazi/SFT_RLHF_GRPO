@@ -8,13 +8,24 @@ from transformers import (
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
+import gc
 
-model_name = "model_with_specials"
+
+# Clear Python memory
+gc.collect()
+
+# Clear GPU memory
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    print("✅ GPU memory cleared")
+
+print("✅ Ready for fresh start")
 
 #%%
 #====================  1. LOAD SAVED MODEL AND TOKENIZER =====================
 #=============================================================================
-
+model_name = "model_with_specials"
 tokenizer = AutoTokenizer.from_pretrained("tokenizer_with_specials")
 # test_load = AutoModelForCausalLM.from_pretrained("model_with_specials")
 # inspect special tokens
@@ -124,7 +135,7 @@ else:
     # model.resize_token_embeddings(len(tokenizer))
     
     # Enable gradient checkpointing for memory efficiency
-    model.gradient_checkpointing_enable()
+    # model.gradient_checkpointing_enable()
     
     print(f"Model loaded in full precision (bf16) with Flash Attention 2")
 
@@ -490,8 +501,6 @@ trainer.add_callback(VerboseTrainingCallback(trainer=trainer))
 #=========================== 8. TRAINING ====================================
 #============================================================================
 # Train the model
-torch.cuda.empty_cache()
-torch.cuda.reset_peak_memory_stats()
 
 trainer.train()
 
