@@ -254,7 +254,7 @@ training_args = SFTConfig(
     # SFT-Specific Parameters
     # -------------------------
     # Sequence handling
-    max_length=8192, 
+    # max_length=8192, 
     packing=False,                       # keeps sequences contiguous in memory
 
     # Masking - since dataset already has assistant-only masks
@@ -280,6 +280,7 @@ trainer = SFTTrainer(
     train_dataset=train_dataset_formatted,   # pre-formatted
     eval_dataset=eval_dataset_formatted,     # pre-formatted
     data_collator=data_collator,
+    max_seq_length=8192,
 )
 
 # params check
