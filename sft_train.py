@@ -12,15 +12,15 @@ import gc
 
 
 # Clear Python memory
-gc.collect()
+# gc.collect()
 
 # Clear GPU memory
-if torch.cuda.is_available():
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
-    print("✅ GPU memory cleared")
+# if torch.cuda.is_available():
+#     torch.cuda.empty_cache()
+#     torch.cuda.reset_peak_memory_stats()
+#     print("✅ GPU memory cleared")
 
-print("✅ Ready for fresh start")
+# print("✅ Ready for fresh start")
 
 #%%
 #====================  1. LOAD SAVED MODEL AND TOKENIZER =====================
@@ -192,21 +192,21 @@ training_args = SFTConfig(
     overwrite_output_dir=True,
     report_to="tensorboard",           # optional: "wandb" if you prefer
     logging_dir=f"{output_dir}/logs",
-    logging_steps=10,
+    logging_steps=5,
     logging_strategy="steps",
 
     # -------------------------
     # Training Regime
     # -------------------------
-    num_train_epochs=3,
+    num_train_epochs=1,
     max_steps=-1,                       # use num_train_epochs
 
     # -------------------------
     # Batch Sizes - Optimized for H200
     # -------------------------
-    per_device_train_batch_size=20,
-    per_device_eval_batch_size=20,
-    gradient_accumulation_steps=2,     # Effective batch size = 32
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    gradient_accumulation_steps=4,     # Effective batch size = 32
 
     # -------------------------
     # Optimization
@@ -265,7 +265,7 @@ training_args = SFTConfig(
     # SFT-Specific Parameters
     # -------------------------
     # Sequence handling
-    # max_length=8192, 
+    max_length=2048, 
     packing=False,                       # keeps sequences contiguous in memory
 
     # Masking - since dataset already has assistant-only masks
@@ -291,7 +291,7 @@ trainer = SFTTrainer(
     train_dataset=train_dataset_formatted,   # pre-formatted
     eval_dataset=eval_dataset_formatted,     # pre-formatted
     data_collator=data_collator,
-    max_seq_length=8192,
+    
 )
 
 # params check
@@ -497,6 +497,83 @@ class VerboseTrainingCallback(TrainerCallback):
 # Pass trainer reference for better step calculations
 trainer.add_callback(VerboseTrainingCallback(trainer=trainer))
 
+#%%
+# ============ DIAGNOSTIC 1: Check What's Actually Running ============
+print("="*70)
+print("CONFIGURATION VERIFICATION")
+print("="*70)
+
+# Check training args
+print(f"\n1. Training Args:")
+print(f"   per_device_train_batch_size: {training_args.per_device_train_batch_size}")
+print(f"   gradient_accumulation_steps: {training_args.gradient_accumulation_steps}")
+print(f"   gradient_checkpointing: {training_args.gradient_checkpointing}")
+print(f"   bf16: {training_args.bf16}")
+print(f"   tf32: {training_args.tf32}")
+print(f"   optim: {training_args.optim}")
+
+# Check actual batch size being used
+print(f"\n2. Actual DataLoader Batch:")
+test_loader = trainer.get_train_dataloader()
+test_batch = next(iter(test_loader))
+print(f"   Batch shape: {test_batch['input_ids'].shape}")
+print(f"   First dimension (batch_size): {test_batch['input_ids'].shape[0]}")
+
+if test_batch['input_ids'].shape[0] != 16:
+    print(f"   ❌ PROBLEM: Expected 20, got {test_batch['input_ids'].shape[0]}")
+else:
+    print(f"   ✅ Batch size is correct (16)")
+
+# Check model type
+print(f"\n3. Model Info:")
+print(f"   Model type: {type(model)}")
+print(f"   Model dtype: {model.dtype}")
+print(f"   Is compiled: {'_orig_mod' in dir(model)}")  # torch.compile wrapper check
+
+# Check if gradient checkpointing is actually off
+print(f"\n4. Gradient Checkpointing Status:")
+if hasattr(model, 'gradient_checkpointing'):
+    print(f"   model.gradient_checkpointing: {model.gradient_checkpointing}")
+if hasattr(model, 'is_gradient_checkpointing'):
+    print(f"   model.is_gradient_checkpointing: {model.is_gradient_checkpointing}")
+
+# Check actual memory usage with one step
+print(f"\n5. Memory Test:")
+torch.cuda.empty_cache()
+torch.cuda.reset_peak_memory_stats()
+
+test_batch_mem = next(iter(trainer.get_train_dataloader()))
+test_batch_mem = {k: v.to(model.device) for k, v in test_batch_mem.items()}
+
+mem_before = torch.cuda.memory_allocated() / 1e9
+print(f"   Memory before forward: {mem_before:.1f}G")
+
+model.train()
+outputs = model(**test_batch_mem)
+loss = outputs.loss
+
+mem_forward = torch.cuda.memory_allocated() / 1e9
+print(f"   Memory after forward: {mem_forward:.1f}G")
+
+loss.backward()
+
+mem_backward = torch.cuda.memory_allocated() / 1e9
+peak_mem = torch.cuda.max_memory_allocated() / 1e9
+
+print(f"   Memory after backward: {mem_backward:.1f}G")
+print(f"   PEAK memory: {peak_mem:.1f}G")
+
+if peak_mem < 30:
+    print(f"   ❌ CRITICAL PROBLEM: Peak memory is way too low!")
+    print(f"   Something is preventing proper batch size / disabling optimizations")
+elif peak_mem < 50:
+    print(f"   ⚠️  Memory lower than expected")
+else:
+    print(f"   ✅ Memory usage looks reasonable")
+
+model.zero_grad()
+
+print("="*70 + "\n")
 #%%
 #=========================== 8. TRAINING ====================================
 #============================================================================
