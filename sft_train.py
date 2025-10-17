@@ -1,5 +1,10 @@
 #%%
 import torch
+
+print(f"GPU memory allocated: {torch.cuda.memory_allocated() / 1e9:.1f}G")
+print(f"GPU memory reserved: {torch.cuda.memory_reserved() / 1e9:.1f}G")
+#%%
+import torch
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -14,11 +19,11 @@ import gc
 # Clear Python memory
 # gc.collect()
 
-# Clear GPU memory
-# if torch.cuda.is_available():
-#     torch.cuda.empty_cache()
-#     torch.cuda.reset_peak_memory_stats()
-#     print("✅ GPU memory cleared")
+#Clear GPU memory
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    print("✅ GPU memory cleared")
 
 # print("✅ Ready for fresh start")
 
@@ -27,7 +32,7 @@ import gc
 #=============================================================================
 model_name = "model_with_specials"
 tokenizer = AutoTokenizer.from_pretrained("tokenizer_with_specials")
-# test_load = AutoModelForCausalLM.from_pretrained("model_with_specials")
+# model = AutoModelForCausalLM.from_pretrained("model_with_specials")
 # inspect special tokens
 print(f"Padding token: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
 print(f"Special tokens: {tokenizer.additional_special_tokens}")
@@ -127,7 +132,8 @@ else:
         model_name,
         device_map="auto",
         trust_remote_code=True,
-        attn_implementation="flash_attention_2",
+        # attn_implementation="flash_attention_2",
+        attn_implementation="sdpa",  # Use PyTorch's scaled_dot_product_attention
         dtype=torch.bfloat16,          # Full bf16 precision
     )
     
@@ -183,7 +189,8 @@ import dynamic_padding_util
 data_collator = dynamic_padding_util.DataCollatorForCompletionOnlyLM(tokenizer=tokenizer)
 
 output_dir = "./model_logs"
-
+model.gradient_checkpointing_disable()
+print(f"Gradient checkpointing: {model.is_gradient_checkpointing}")
 training_args = SFTConfig(
     # -------------------------
     # Output and Logging
@@ -204,9 +211,9 @@ training_args = SFTConfig(
     # -------------------------
     # Batch Sizes - Optimized for H200
     # -------------------------
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
-    gradient_accumulation_steps=4,     # Effective batch size = 32
+    per_device_train_batch_size=20,
+    per_device_eval_batch_size=2,
+    gradient_accumulation_steps=2,     # Effective batch size = 32
 
     # -------------------------
     # Optimization
@@ -519,10 +526,10 @@ test_batch = next(iter(test_loader))
 print(f"   Batch shape: {test_batch['input_ids'].shape}")
 print(f"   First dimension (batch_size): {test_batch['input_ids'].shape[0]}")
 
-if test_batch['input_ids'].shape[0] != 16:
+if test_batch['input_ids'].shape[0] != 20:
     print(f"   ❌ PROBLEM: Expected 20, got {test_batch['input_ids'].shape[0]}")
 else:
-    print(f"   ✅ Batch size is correct (16)")
+    print(f"   ✅ Batch size is correct (20)")
 
 # Check model type
 print(f"\n3. Model Info:")
@@ -574,6 +581,7 @@ else:
 model.zero_grad()
 
 print("="*70 + "\n")
+
 #%%
 #=========================== 8. TRAINING ====================================
 #============================================================================
@@ -717,4 +725,141 @@ with torch.no_grad():
         print("❌ No valid tokens to train on!")
 
 print("="*60 + "\n")
+# %%
+#%%
+print(f"Model config attention: {model.config._attn_implementation}")
+print(f"Expected: flash_attention_2")
+
+# Also check if flash-attn is actually installed
+try:
+    import flash_attn
+    print(f"✅ flash-attn installed: {flash_attn.__version__}")
+except ImportError:
+    print("❌ flash-attn NOT installed! This is the problem!")
+# %%
+#%%
+# ============ CRITICAL CHECKS ============
+
+print("="*70)
+print("CRITICAL CONFIGURATION CHECKS")
+print("="*70)
+
+# 1. Check vocab size mismatch
+print(f"\n1. Vocabulary Size Check:")
+print(f"   Tokenizer vocab size: {len(tokenizer)}")
+print(f"   Model config vocab size: {model.config.vocab_size}")
+print(f"   Embedding weight shape: {model.get_input_embeddings().weight.shape}")
+print(f"   LM head weight shape: {model.get_output_embeddings().weight.shape}")
+
+if model.get_input_embeddings().weight.shape[0] != len(tokenizer):
+    print(f"   ❌ MISMATCH! Embedding has {model.get_input_embeddings().weight.shape[0]} but tokenizer has {len(tokenizer)}")
+else:
+    print(f"   ✅ Vocabulary sizes match")
+
+# 2. Check LoRA application
+print(f"\n2. LoRA Configuration:")
+trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+total = sum(p.numel() for p in model.parameters())
+print(f"   Total parameters: {total:,}")
+print(f"   Trainable parameters: {trainable:,}")
+print(f"   Trainable %: {100*trainable/total:.2f}%")
+
+if trainable / total > 0.1:  # More than 10%
+    print(f"   ❌ WARNING: Training {100*trainable/total:.1f}% of model!")
+    print(f"      LoRA may not be applied correctly")
+elif trainable / total < 0.01:  # Less than 1%
+    print(f"   ⚠️  Only training {100*trainable/total:.2f}% - very few parameters")
+else:
+    print(f"   ✅ LoRA looks correctly applied (~2-3% expected)")
+
+# 3. Check actual GPU memory used by model
+print(f"\n3. GPU Memory Usage:")
+torch.cuda.empty_cache()
+mem_allocated = torch.cuda.memory_allocated() / 1e9
+mem_reserved = torch.cuda.memory_reserved() / 1e9
+total_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
+
+print(f"   Allocated: {mem_allocated:.1f}G")
+print(f"   Reserved: {mem_reserved:.1f}G")
+print(f"   Total GPU: {total_mem:.1f}G")
+print(f"   Free: {total_mem - mem_allocated:.1f}G")
+
+if mem_allocated > 25:
+    print(f"   ❌ Model using {mem_allocated:.1f}G - too much for 7B model in BF16!")
+elif mem_allocated < 12:
+    print(f"   ⚠️  Model using only {mem_allocated:.1f}G - seems low")
+else:
+    print(f"   ✅ Model memory usage looks normal")
+
+# 4. Check gradient checkpointing state
+print(f"\n4. Gradient Checkpointing:")
+print(f"   is_gradient_checkpointing: {model.is_gradient_checkpointing}")
+if hasattr(model, 'base_model'):
+    if hasattr(model.base_model, 'is_gradient_checkpointing'):
+        print(f"   base_model.is_gradient_checkpointing: {model.base_model.is_gradient_checkpointing}")
+
+# 5. Check attention implementation
+print(f"\n5. Attention Implementation:")
+print(f"   Config says: {model.config._attn_implementation}")
+
+# 6. Test with MINIMAL batch
+print(f"\n6. Testing MINIMAL Batch (1 example, 512 tokens):")
+torch.cuda.empty_cache()
+torch.cuda.reset_peak_memory_stats()
+
+test_input = {
+    'input_ids': torch.randint(0, len(tokenizer), (1, 512), device='cuda'),
+    'attention_mask': torch.ones((1, 512), device='cuda'),
+    'labels': torch.randint(0, len(tokenizer), (1, 512), device='cuda'),
+}
+
+try:
+    model.train()
+    
+    mem_before = torch.cuda.memory_allocated() / 1e9
+    
+    outputs = model(**test_input)
+    loss = outputs.loss
+    
+    mem_forward = torch.cuda.memory_allocated() / 1e9
+    
+    loss.backward()
+    
+    mem_backward = torch.cuda.memory_allocated() / 1e9
+    peak = torch.cuda.max_memory_allocated() / 1e9
+    
+    print(f"   Before: {mem_before:.1f}G")
+    print(f"   After forward: {mem_forward:.1f}G (delta: +{mem_forward-mem_before:.1f}G)")
+    print(f"   After backward: {mem_backward:.1f}G (delta: +{mem_backward-mem_forward:.1f}G)")
+    print(f"   Peak: {peak:.1f}G")
+    
+    # For batch=1, seq=512, this should use ~20-25G total
+    if peak > 35:
+        print(f"   ❌ CRITICAL: Single small example used {peak:.1f}G!")
+        print(f"      Expected ~20-25G max")
+    else:
+        print(f"   ✅ Memory usage looks reasonable")
+    
+    model.zero_grad()
+    
+except Exception as e:
+    print(f"   ❌ ERROR: {e}")
+
+torch.cuda.empty_cache()
+
+# 7. Check sequence lengths in actual dataset
+print(f"\n7. Checking Actual Sequence Lengths:")
+if 'train_dataset_formatted' in globals():
+    lengths = [len(ex['input_ids']) for ex in train_dataset_formatted.select(range(min(100, len(train_dataset_formatted))))]
+    print(f"   Min: {min(lengths)}")
+    print(f"   Max: {max(lengths)}")
+    print(f"   Mean: {sum(lengths)/len(lengths):.0f}")
+    print(f"   Median: {sorted(lengths)[len(lengths)//2]}")
+    
+    if max(lengths) > 6000:
+        print(f"   ❌ CRITICAL: Some sequences are {max(lengths)} tokens!")
+        print(f"      This explains the OOM")
+        print(f"      With batch=8 and seq=6000+, you'd need massive memory")
+
+print("="*70)
 # %%
