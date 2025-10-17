@@ -200,25 +200,26 @@ training_args = SFTConfig(
     # -------------------------
     # Optimization
     # -------------------------
-    learning_rate=2e-4,
+    learning_rate=1e-4,
     lr_scheduler_type="cosine",
-    # warmup_ratio=0.01,
-    warmup_steps=100,
+    warmup_ratio=0.03,
+    # warmup_steps=100,
     weight_decay=0.01,
     max_grad_norm=1.0,
-    optim="paged_adamw_8bit",
+    optim="adamw_torch_fused",
 
     # -------------------------
     # Precision
     # -------------------------
     bf16=True,
     bf16_full_eval=True,
+    tf32=True
 
     # -------------------------
     # Memory Optimizations
     # -------------------------
-    gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"use_reentrant": False},  # more stable
+    gradient_checkpointing=False,
+    # gradient_checkpointing_kwargs={"use_reentrant": False},  # more stable
     # Optional: activation offloading if needed
     # activation_offloading=True,  
     # activation_offloading_params={"device": "cpu"},
@@ -243,8 +244,9 @@ training_args = SFTConfig(
     # -------------------------
     # Performance
     # -------------------------
-    dataloader_num_workers=4,
+    dataloader_num_workers=8,
     dataloader_pin_memory=True,
+    dataloader_prefetch_factor=2,
     log_level="info",
     disable_tqdm=False,
 
@@ -252,7 +254,7 @@ training_args = SFTConfig(
     # SFT-Specific Parameters
     # -------------------------
     # Sequence handling
-    max_length=8192,
+    max_seq_length=8192, 
     packing=False,                       # keeps sequences contiguous in memory
 
     # Masking - since dataset already has assistant-only masks
@@ -280,8 +282,6 @@ trainer = SFTTrainer(
     data_collator=data_collator,
 )
 
-
-#%%
 # params check
 for n, p in model.named_parameters():
     if p.requires_grad:
@@ -289,6 +289,22 @@ for n, p in model.named_parameters():
         break
 
 model.print_trainable_parameters()
+
+#%%
+# ======================= COMPILE THE MODEL =======================
+if torch.__version__ >= "2.0.0":
+    print("\n" + "="*70)
+    print("🚀 Compiling model with torch.compile...")
+    print("This will take 2-3 minutes on first training step, then speeds up!")
+    print("="*70 + "\n")
+    
+    # Compile the trainer's model (not the original model variable)
+    trainer.model = torch.compile(trainer.model, mode="reduce-overhead")
+    
+    print("✅ Model wrapped for compilation!\n")
+else:
+    print("⚠️  PyTorch version < 2.0. Skipping torch.compile (consider upgrading)")
+
 
 #%%
 #=========================== 7. LOGGING UTILITY  =============================
