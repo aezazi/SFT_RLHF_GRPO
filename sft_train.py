@@ -105,7 +105,7 @@ if bnb_config is not None:
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         quantization_config=bnb_config,
-        device_map="auto",                    # Automatic device placement
+        # device_map="auto",                    # Automatic device placement
         trust_remote_code=True,
         attn_implementation="flash_attention_2",  # Enable Flash Attention 2
         dtype=torch.bfloat16,          # Use bf16 for non-quantized layers
@@ -130,7 +130,7 @@ if bnb_config is not None:
 else:
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        device_map="auto",
+        # device_map="auto",
         trust_remote_code=True,
         # attn_implementation="flash_attention_2",
         attn_implementation="sdpa",  # Use PyTorch's scaled_dot_product_attention
@@ -236,8 +236,8 @@ training_args = SFTConfig(
     # -------------------------
     # Memory Optimizations
     # -------------------------
-    gradient_checkpointing=False,
-    # gradient_checkpointing_kwargs={"use_reentrant": False},  # more stable
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"use_reentrant": False},  # more stable
     # Optional: activation offloading if needed
     # activation_offloading=True,  
     # activation_offloading_params={"device": "cpu"},
