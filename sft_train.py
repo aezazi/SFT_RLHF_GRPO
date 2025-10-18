@@ -16,16 +16,12 @@ from datasets import load_dataset
 import gc
 
 
-# Clear Python memory
-# gc.collect()
-
 #Clear GPU memory
 if torch.cuda.is_available():
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     print("✅ GPU memory cleared")
 
-# print("✅ Ready for fresh start")
 
 #%%
 #====================  1. LOAD SAVED MODEL AND TOKENIZER =====================
@@ -105,7 +101,7 @@ if bnb_config is not None:
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         quantization_config=bnb_config,
-        # device_map="auto",                    # Automatic device placement
+        device_map=None,                    # Automatic device placement
         trust_remote_code=True,
         attn_implementation="flash_attention_2",  # Enable Flash Attention 2
         dtype=torch.bfloat16,          # Use bf16 for non-quantized layers
@@ -130,10 +126,10 @@ if bnb_config is not None:
 else:
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        # device_map="auto",
+        device_map=None,
         trust_remote_code=True,
-        # attn_implementation="flash_attention_2",
-        attn_implementation="sdpa",  # Use PyTorch's scaled_dot_product_attention
+        attn_implementation="flash_attention_2",
+        # attn_implementation="sdpa",  # Use PyTorch's scaled_dot_product_attention
         dtype=torch.bfloat16,          # Full bf16 precision
     )
     
@@ -141,7 +137,7 @@ else:
     # model.resize_token_embeddings(len(tokenizer))
     
     # Enable gradient checkpointing for memory efficiency
-    # model.gradient_checkpointing_enable()
+    model.gradient_checkpointing_enable()
     
     print(f"Model loaded in full precision (bf16) with Flash Attention 2")
 
@@ -189,7 +185,7 @@ import dynamic_padding_util
 data_collator = dynamic_padding_util.DataCollatorForCompletionOnlyLM(tokenizer=tokenizer)
 
 output_dir = "./model_logs"
-model.gradient_checkpointing_disable()
+# model.gradient_checkpointing_disable()
 print(f"Gradient checkpointing: {model.is_gradient_checkpointing}")
 training_args = SFTConfig(
     # -------------------------
@@ -290,7 +286,7 @@ training_args = SFTConfig(
 #%%
 # ======================= 6. SFT TRAINER CONFIGURATION =======================
 # ============================================================================
-
+model = model.to("cuda")
 trainer = SFTTrainer(
     model=model,
     processing_class=tokenizer,
