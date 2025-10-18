@@ -1,8 +1,4 @@
-#%%
-import torch
 
-print(f"GPU memory allocated: {torch.cuda.memory_allocated() / 1e9:.1f}G")
-print(f"GPU memory reserved: {torch.cuda.memory_reserved() / 1e9:.1f}G")
 #%%
 import torch
 from transformers import (
@@ -45,7 +41,6 @@ from datasets import load_from_disk
 train_dataset_formatted = load_from_disk("./ultrachat_train_formatted")
 eval_dataset_formatted = load_from_disk("./ultrachat_eval_formatted")
 
-#%%
 sample = train_dataset_formatted[0]
 print(tokenizer.decode(sample["input_ids"]))
 print(sample.keys())
@@ -184,16 +179,6 @@ print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_pa
 import dynamic_padding_util
 data_collator = dynamic_padding_util.DataCollatorForCompletionOnlyLM(tokenizer=tokenizer)
 
-
-# --------------------------------------------------
-# GPU-aware collator wrapper
-# --------------------------------------------------
-def gpu_collate(batch):
-    """Calls your custom collator, then moves tensors to CUDA."""
-    batch = data_collator(batch)
-    return {k: v.to("cuda", non_blocking=True) for k, v in batch.items()}
-
-
 output_dir = "./model_logs"
 # model.gradient_checkpointing_disable()
 print(f"Gradient checkpointing: {model.is_gradient_checkpointing}")
@@ -219,7 +204,7 @@ training_args = SFTConfig(
     # -------------------------
     per_device_train_batch_size=20,
     per_device_eval_batch_size=2,
-    gradient_accumulation_steps=2,     # Effective batch size = 32
+    gradient_accumulation_steps=2,   
 
     # -------------------------
     # Optimization
@@ -303,7 +288,7 @@ trainer = SFTTrainer(
     args=training_args,
     train_dataset=train_dataset_formatted,   # pre-formatted
     eval_dataset=eval_dataset_formatted,     # pre-formatted
-    data_collator=gpu_collate,
+    data_collator=data_collator,
     
 )
 
