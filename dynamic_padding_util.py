@@ -3,11 +3,12 @@ from typing import Any, Dict, List
 import torch
 
 @dataclass
-class DataCollatorForCompletionOnlyLM:
+class DataCollatorForDynamicPadding:
     """
     Data collator that:
     1. Pads dynamically to the longest sequence in each batch
-    2. Preserves your pre-computed labels with -100 masking
+    2. Preserves your labels (which already equal input_ids - no masking)
+    3. Pads labels with -100 for padding tokens only
     """
     tokenizer: Any
     
@@ -29,7 +30,7 @@ class DataCollatorForCompletionOnlyLM:
             # Pad input_ids with pad_token_id
             padded_input_ids = input_ids + [self.tokenizer.pad_token_id] * padding_length
             
-            # Pad labels with -100 (ignore_index)
+            # Pad labels with -100 (ignore_index for padding tokens only)
             padded_labels = labels + [-100] * padding_length
             
             # Create attention mask (1 for real tokens, 0 for padding)

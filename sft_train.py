@@ -184,16 +184,6 @@ print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_pa
 import dynamic_padding_util
 data_collator = dynamic_padding_util.DataCollatorForCompletionOnlyLM(tokenizer=tokenizer)
 
-
-# --------------------------------------------------
-# GPU-aware collator wrapper
-# --------------------------------------------------
-def gpu_collate(batch):
-    """Calls your custom collator, then moves tensors to CUDA."""
-    batch = data_collator(batch)
-    return {k: v.to("cuda", non_blocking=True) for k, v in batch.items()}
-
-
 output_dir = "./model_logs"
 # model.gradient_checkpointing_disable()
 print(f"Gradient checkpointing: {model.is_gradient_checkpointing}")
@@ -303,7 +293,7 @@ trainer = SFTTrainer(
     args=training_args,
     train_dataset=train_dataset_formatted,   # pre-formatted
     eval_dataset=eval_dataset_formatted,     # pre-formatted
-    data_collator=gpu_collate,
+    data_collator=data_collator,
     
 )
 

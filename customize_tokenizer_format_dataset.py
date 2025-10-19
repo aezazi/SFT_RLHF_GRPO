@@ -178,37 +178,18 @@ print(f"Special tokens added: {tokenizer.all_special_tokens}")
 #%%
 # Define ChatML template with non-assistant masking
 
-chat_template = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'user' %}{{ '<|im_start|>user\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant\n' }}{% generation %}{{ message['content'] }}{% endgeneration %}{{ '<|im_end|>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"""
+chat_template_masking = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'user' %}{{ '<|im_start|>user\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant\n' }}{% generation %}{{ message['content'] }}{% endgeneration %}{{ '<|im_end|>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"""
+
+
+
+chat_template_1 = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'user' %}{{ '<|im_start|>user\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant\n' + message['content'] + '<|im_end|>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"""
+
+
 
 tokenizer.chat_template = chat_template
 
 #%%
-# Verify it works
-test_messages = [
-    {"role": "user", "content": "Hello"},
-    {"role": "assistant", "content": "Hi there!"}
-]
 
-result = tokenizer.apply_chat_template(
-    test_messages,
-    tokenize=True,
-    return_assistant_tokens_mask=True,
-    return_dict=True,
-    add_generation_prompt=False
-)
-
-print(f"Result type: {type(result)}")
-if 'assistant_masks' in result:
-    print("✓ Chat template supports assistant_only_loss!")
-    print(f"Input IDs: {result['input_ids']}")
-    print(f"Assistant mask: {result['assistant_masks']}")
-    print(f"\nMask breakdown:")
-    tokens = tokenizer.convert_ids_to_tokens(result['input_ids'])
-    for token, mask in zip(tokens, result['assistant_masks']):
-        indicator = "→ TRAIN" if mask == 1 else ""
-        print(f"  {token:20s} mask={mask} {indicator}")
-else:
-    print("✗ Chat template does NOT support assistant_only_loss")
 
 
 
@@ -216,23 +197,135 @@ else:
 # Create function apply chat template to datasets
 
 def formatting_func(example):
+    """
+    Apply chat template and train on ALL tokens (system + user + assistant).
+    No masking applied.
+    """
     result = tokenizer.apply_chat_template(
         example["messages"],
         tokenize=True,
         return_dict=True,
-        return_assistant_tokens_mask=True,
         add_generation_prompt=False
     )
-
+    
     input_ids = result["input_ids"]
-    assistant_mask = result["assistant_masks"]
-    labels = [tok if mask else -100 for tok, mask in zip(input_ids, assistant_mask)]
-
+    
+    # Train on everything - labels = input_ids (no masking)
+    labels = input_ids.copy()
+    
     return {
         "input_ids": input_ids,
         "labels": labels,
     }
 
+#%%
+# ============================================
+# VERIFY CHAT TEMPLATE (FULL CONVERSATION TRAINING)
+# ============================================
+
+# Test with sample messages
+test_messages = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi there!"}
+]
+
+# Apply chat template
+result = tokenizer.apply_chat_template(
+    test_messages,
+    tokenize=True,
+    return_dict=True,
+    add_generation_prompt=False
+)
+
+print("="*70)
+print("CHAT TEMPLATE VERIFICATION - FULL CONVERSATION TRAINING")
+print("="*70)
+
+# Check result structure
+print(f"\nResult type: {type(result)}")
+print(f"Result keys: {result.keys()}")
+
+input_ids = result['input_ids']
+print(f"\nTotal tokens: {len(input_ids)}")
+
+# Decode to see formatted output
+formatted_text = tokenizer.decode(input_ids)
+print(f"\nFormatted conversation:")
+print("-"*70)
+print(formatted_text)
+print("-"*70)
+
+# Show token-by-token breakdown
+print(f"\nToken-by-token breakdown:")
+print(f"{'Token':<25} {'Token ID':<10} {'Training'}")
+print("-"*70)
+
+tokens = tokenizer.convert_ids_to_tokens(input_ids)
+for i, (token, tok_id) in enumerate(zip(tokens, input_ids)):
+    # With Option 1 (no masking), ALL tokens are trained
+    status = "✓ TRAIN"
+    print(f"{token:<25} {tok_id:<10} {status}")
+
+# Summary
+print("\n" + "="*70)
+print("SUMMARY:")
+print("="*70)
+print(f"✓ Chat template applied successfully")
+print(f"✓ Total tokens: {len(input_ids)}")
+print(f"✓ Trainable tokens: {len(input_ids)} (100%)")
+print(f"✓ Masked tokens: 0 (0%)")
+print(f"\n✅ ALL TOKENS WILL BE TRAINED (full conversation training)")
+print("="*70)
+
+# Verify special tokens are present
+special_tokens_found = {
+    '<|im_start|>': False,
+    '<|im_end|>': False,
+}
+
+for token in tokens:
+    if '<|im_start|>' in token:
+        special_tokens_found['<|im_start|>'] = True
+    if '<|im_end|>' in token:
+        special_tokens_found['<|im_end|>'] = True
+
+print("\nSpecial tokens check:")
+for token_name, found in special_tokens_found.items():
+    status = "✓" if found else "✗"
+    print(f"  {status} {token_name}: {'Found' if found else 'NOT FOUND'}")
+
+# Test formatting function with this example
+print("\n" + "="*70)
+print("TESTING FORMATTING FUNCTION:")
+print("="*70)
+
+test_example = {"messages": test_messages}
+formatted_example = formatting_func(test_example)
+
+print(f"\nFormatting function output:")
+print(f"  input_ids length: {len(formatted_example['input_ids'])}")
+print(f"  labels length: {len(formatted_example['labels'])}")
+
+# Check if labels match input_ids (no masking)
+labels_match = formatted_example['input_ids'] == formatted_example['labels']
+print(f"  labels == input_ids: {labels_match}")
+
+# Count masked tokens in labels
+masked_count = sum(1 for x in formatted_example['labels'] if x == -100)
+trainable_count = sum(1 for x in formatted_example['labels'] if x != -100)
+
+print(f"\nLabel breakdown:")
+print(f"  Masked tokens (-100): {masked_count}")
+print(f"  Trainable tokens: {trainable_count}")
+print(f"  Percentage trainable: {100 * trainable_count / len(formatted_example['labels']):.1f}%")
+
+if masked_count == 0:
+    print(f"\n✅ SUCCESS: No masking applied - training on full conversation!")
+else:
+    print(f"\n⚠️ WARNING: Some tokens are masked - check template or formatting function!")
+
+print("="*70)
 #%%
 # test the formatting function
 
