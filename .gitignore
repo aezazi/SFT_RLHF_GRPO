@@ -53,4 +53,8 @@ dataset_ultrachat_templated/
 dataset_ultrachat_train_sft_templated/
 ultrachat_train_formatted/
 ultrachat_eval_formatted/
+ultrachat_train_formatted_tutorial/
+ultrachat_eval_formatted_tutorial/
 model_with_specials/
+model_tutorial/
+model_aae1/

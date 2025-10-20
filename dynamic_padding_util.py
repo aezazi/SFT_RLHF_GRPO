@@ -1,5 +1,9 @@
+from transformers import TrainingArguments
+from trl import SFTTrainer
+from torch.utils.data import Dataset
+
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Dict, List
 import torch
 
 @dataclass
@@ -45,3 +49,20 @@ class DataCollatorForDynamicPadding:
             "labels": torch.tensor(batch_labels, dtype=torch.long),
             "attention_mask": torch.tensor(batch_attention_mask, dtype=torch.long),
         }
+    
+@dataclass
+class DataCollatorForCompletionOnlyLM:
+    tokenizer: AutoTokenizer
+    pad_to_multiple_of: int = 8
+
+    def __call__(self, batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        input_ids = [b["input_ids"] for b in batch]
+        labels = [b["labels"] for b in batch]
+
+        batch_padded = self.tokenizer.pad(
+            {"input_ids": input_ids, 'attention_mask': attention_mask, "labels": labels},
+            padding=True,
+            return_tensors="pt",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        return batch_padded

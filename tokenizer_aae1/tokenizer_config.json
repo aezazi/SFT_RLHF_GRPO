@@ -1,5 +1,5 @@
 {
-  "add_bos_token": false,
+  "add_bos_token": true,
   "add_eos_token": false,
   "add_prefix_space": null,
   "added_tokens_decoder": {
@@ -36,7 +36,7 @@
       "special": true
     },
     "32001": {
-      "content": "<|im_start|>",
+      "content": "<|user|>",
       "lstrip": false,
       "normalized": false,
       "rstrip": false,
@@ -44,7 +44,7 @@
       "special": true
     },
     "32002": {
-      "content": "<|im_end|>",
+      "content": "<|assistant|>",
       "lstrip": false,
       "normalized": false,
       "rstrip": false,
@@ -52,7 +52,7 @@
       "special": true
     },
     "32003": {
-      "content": "<|endoftext|>",
+      "content": "<|system|>",
       "lstrip": false,
       "normalized": false,
       "rstrip": false,
@@ -61,13 +61,13 @@
     }
   },
   "additional_special_tokens": [
-    "<|im_start|>",
-    "<|im_end|>",
-    "<|endoftext|>"
+    "<|user|>",
+    "<|assistant|>",
+    "<|system|>"
   ],
-  "bos_token": "<|im_start|>",
+  "bos_token": "<s>",
   "clean_up_tokenization_spaces": false,
-  "eos_token": "<|endoftext|>",
+  "eos_token": "</s>",
   "extra_special_tokens": {},
   "legacy": false,
   "model_max_length": 1000000000000000019884624838656,
