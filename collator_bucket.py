@@ -9,14 +9,14 @@ import math
 
 #%%
 # Load dataset and tokenizer
-dataset = load_from_disk("./ultrachat_train_formatted_tutorial")
+dataset = load_from_disk("./ultrachat_train_formatted")
 test_dataset = dataset.select(range(6))  # pick first 6 examples for testing
 tokenizer = AutoTokenizer.from_pretrained("tokenizer_aae1")
 
 #%%
 # Data collator (same as before)
 @dataclass
-class DataCollatorForCompletionOnlyLM:
+class DataCollatorForPadding:
     tokenizer: AutoTokenizer
     pad_to_multiple_of: int = 8
     label_pad_token_id: int = -100
@@ -44,59 +44,85 @@ class DataCollatorForCompletionOnlyLM:
 
         return batch_padded
 
-collator = DataCollatorForCompletionOnlyLM(tokenizer)
+# collator = DataCollatorForPadding(tokenizer)
 
 #%%
 # --- Bucketing Sampler ---
-class BucketSampler(Sampler):
-    """
-    Groups examples of similar lengths into the same batch to reduce padding.
-    """
-    def __init__(self, data_source: Dataset, batch_size: int):
+# class BucketSampler(Sampler):
+#     """
+#     Groups examples of similar lengths into the same batch to reduce padding.
+#     """
+#     def __init__(self, data_source: Dataset, batch_size: int):
+#         self.data_source = data_source
+#         self.batch_size = batch_size
+        
+#         # Sort indices by sequence length (descending)
+#         self.sorted_indices = sorted(
+#             range(len(data_source)), 
+#             key=lambda i: len(data_source[i]["input_ids"]),
+#             reverse=True
+#         )
+
+#         # Break sorted indices into batches
+#         self.batches = [
+#             self.sorted_indices[i:i + batch_size] 
+#             for i in range(0, len(self.sorted_indices), batch_size)
+#         ]
+
+#     def __iter__(self):
+#         for batch in self.batches:
+#             yield batch
+
+#     def __len__(self):
+#         return len(self.batches)
+    
+class BucketSampler(torch.utils.data.Sampler):
+    def __init__(self, data_source, batch_size):
         self.data_source = data_source
         self.batch_size = batch_size
-        
-        # Sort indices by sequence length (descending)
         self.sorted_indices = sorted(
-            range(len(data_source)), 
+            range(len(data_source)),
             key=lambda i: len(data_source[i]["input_ids"]),
             reverse=True
         )
-
-        # Break sorted indices into batches
+        # Create batches of indices
         self.batches = [
-            self.sorted_indices[i:i + batch_size] 
+            self.sorted_indices[i:i + batch_size]
             for i in range(0, len(self.sorted_indices), batch_size)
         ]
 
     def __iter__(self):
         for batch in self.batches:
-            yield batch
+            # Fetch actual dataset items here
+            yield [self.data_source[i] for i in batch]
 
     def __len__(self):
         return len(self.batches)
 
 #%%
+# test script
 # Create DataLoader using BucketSampler
-batch_size = 2
-loader = DataLoader(
-    test_dataset,
-    batch_sampler=BucketSampler(test_dataset, batch_size=batch_size),
-    collate_fn=collator
-)
+# batch_size = 2
+# loader = DataLoader(
+#     test_dataset,
+#     batch_sampler=BucketSampler(test_dataset, batch_size=batch_size),
+#     collate_fn=collator
+# )
 
-#%%
-# Test bucketing: print batch shapes and first few tokens
-for i, batch in enumerate(loader):
-    print(f"\n=== Batch {i} ===")
-    print("input_ids shape:", batch["input_ids"].shape)
-    print("attention_mask shape:", batch["attention_mask"].shape)
-    print("labels shape:", batch["labels"].shape)
-    print("First example input_ids (first 50 tokens):")
-    print(batch["input_ids"][0, :50])
-    print("First example labels (first 50 tokens):")
-    print(batch["labels"][0, :50])
+# #%%
+# # Test bucketing: print batch shapes and first few tokens
+# for i, batch in enumerate(loader):
+#     print(f"\n=== Batch {i} ===")
+#     print("input_ids shape:", batch["input_ids"].shape)
+#     print("attention_mask shape:", batch["attention_mask"].shape)
+#     print("labels shape:", batch["labels"].shape)
+#     print("First example input_ids (first 50 tokens):")
+#     print(batch["input_ids"][0, :50])
+#     print("First example labels (first 50 tokens):")
+#     print(batch["labels"][0, :50])
 
+# # %%
+# print(tokenizer.decode(batch["input_ids"][0, :]))
 # %%
-print(tokenizer.decode(batch["input_ids"][0, :]))
+
 # %%

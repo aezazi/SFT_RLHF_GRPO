@@ -178,33 +178,19 @@ tokenizer.chat_template = chat_template
 #%%
 # Create function apply chat template to datasets
 
-def formatting_func(example):
-    """
-    Apply chat template and train on ALL tokens (system + user + assistant).
-    Includes attention_mask for trainer compatibility.
-    """
-    result = tokenizer.apply_chat_template(
-        example["messages"],
-        tokenize=True,
-        return_dict=True,
-        add_generation_prompt=False,
-    )
-    
-    input_ids = result["input_ids"]
-    attention_mask = result["attention_mask"]
-    labels = input_ids.copy()
-
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "labels": labels,
-    }
+def formatting_func(example, tokenizer):
+    messages = example["messages"]
+    # Ensure system message exists
+    if len(messages) == 0 or messages[0]["role"] != "system":
+        messages.insert(0, {"role": "system", "content": ""})
+    example["text"] = tokenizer.apply_chat_template(messages, tokenize=False)
+    return example
 
 #%%
 # test the formatting function
 
 # Mock conversation
-example = {
+test_example = {
     "messages": [
         {"role": "system", "content": "You are a helpful AI assistant."},
         {"role": "user", "content": "Hi, can you tell me a joke?"},
@@ -216,38 +202,34 @@ example = {
 
 
 # appply formatting function to example
-tokenized = formatting_func(example)
-input_ids = tokenized["input_ids"]
-
-print(f'================== chat template applied and tokenized ===========')
-print(input_ids)
-labels = tokenized["labels"]
-
-# Decode 
-decoded_text = tokenizer.decode(input_ids)
-
-print("\n=== converstation decoded ===")
-print(decoded_text)
+formatted = formatting_func(test_example, tokenizer)
+print(formatted)
 
 
 #%%
 # Apply formatting function to train and eval datasets
 print("Processing train dataset...")
-dataset_train_formatted_tutorial = dataset_train.map(
+dataset_train_formatted = dataset_train.map(
     formatting_func,
+    fn_kwargs={"tokenizer": tokenizer},
     batched=False,        # True if your formatting_func can handle batches
-    remove_columns=dataset_train.column_names  # Keep only tokenized data
+    remove_columns=dataset_train.column_names  # Keep only formatted data
 )
 
 print("Processing eval dataset...")
-dataset_eval_formatted_tutorial = dataset_eval.map(
+dataset_eval_formatted = dataset_eval.map(
     formatting_func,
+    fn_kwargs={"tokenizer": tokenizer},
     batched=False,
     remove_columns=dataset_eval.column_names
 )
 
-dataset_train_formatted_tutorial.save_to_disk("./ultrachat_train_formatted_tutorial")
-dataset_eval_formatted_tutorial.save_to_disk("./ultrachat_eval_formatted_tutorial")
+#%%
+dataset_train_formatted[0]
+
+#%%
+dataset_train_formatted.save_to_disk("./ultrachat_train_formatted")
+dataset_eval_formatted.save_to_disk("./ultrachat_eval_formatted")
 
 #%%
 # save the customized model and tokenizer so we don't have to redo all the above if we want to re-use our custom token and chat template
@@ -258,21 +240,24 @@ model.save_pretrained(save_path_mod)
 
 # %%
 # test load the saved model
-test_load = AutoModelForCausalLM.from_pretrained("./model_tutorial")
+test_load = AutoModelForCausalLM.from_pretrained("./model_aae1")
 
 # %%
+import pprint
 from datasets import load_from_disk
-test_load_train_dataset_formatted = load_from_disk("./ultrachat_train_formatted")
-import numpy as np
+test_load_dataset = load_from_disk("./ultrachat_train_formatted")
 
-test_load_train_dataset_formatted.column_names
+
+print(test_load_dataset.column_names)
+print(type(test_load_dataset))
+pprint.pprint((test_load_dataset['text'][1]))
 
 #%%
-print(test_load_train_dataset_formatted['input_ids'][0])
 
-print(test_load_train_dataset_formatted['labels'][0])
+
+
 #%%
-lengths = [len(example['input_ids']) for example in test_load_train_dataset_formatted]
+lengths = [len(example['input_ids']) for example in test_load_dataset]
 print(f"Mean length: {np.mean(lengths):.0f}")
 print(f"Median length: {np.median(lengths):.0f}")
 print(f"95th percentile: {np.percentile(lengths, 95):.0f}")
