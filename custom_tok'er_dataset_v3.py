@@ -155,8 +155,6 @@ tokenizer.pad_token = "<|pad|>"
 tokenizer.padding_side = "right"
 model.resize_token_embeddings(len(tokenizer))
 
-# 2. Assign those IDs in the model config
-
 model.config.pad_token_id = tokenizer.convert_tokens_to_ids("<|pad|>")
 
 
@@ -225,6 +223,7 @@ dataset_eval_formatted = dataset_eval.map(
 )
 
 #%%
+print(dataset_train_formatted.column_names)
 dataset_train_formatted[0]
 
 #%%

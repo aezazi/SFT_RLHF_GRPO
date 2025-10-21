@@ -9,8 +9,7 @@ import torch
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 from dataclasses import dataclass
 from typing import List, Dict
-# import collator_bucket 
-# from collator_bucket import BucketSampler, DataCollatorForPadding
+
 
 #%%
 if torch.cuda.is_available():
@@ -44,6 +43,7 @@ print(tokenizer.pad_token_id)
 
 
 # %%
+# ----------------------1️⃣ Load the saved model ----------------------
 model_name = "model_aae1"
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
@@ -54,8 +54,6 @@ model = AutoModelForCausalLM.from_pretrained(
     dtype=torch.bfloat16,          # Full bf16 precision
 )
 
-# Resize embeddings to accommodate new tokens
-# model.resize_token_embeddings(len(tokenizer))
 
 # Enable gradient checkpointing for memory efficiency
 model.gradient_checkpointing_enable()
@@ -63,15 +61,15 @@ model.gradient_checkpointing_enable()
 print(f"Model dtype: {model.dtype}")
     
 # %%
-
+# ----------------------1️⃣ Set SFTCofig parameters ----------------------
 output_dir = 'model_logs'
 
 training_args = SFTConfig(
     output_dir=output_dir,
     overwrite_output_dir=True,
 
-    per_device_eval_batch_size=1, # originally set to 8
-    per_device_train_batch_size=1, # originally set to 8
+    per_device_eval_batch_size=4, # originally set to 8
+    per_device_train_batch_size=4, # originally set to 8
     gradient_accumulation_steps=2,
     learning_rate=2.0e-05,
     lr_scheduler_type="cosine",
@@ -89,7 +87,14 @@ training_args = SFTConfig(
     # activation_offloading_params={"device": "cpu"},
 
 
-    fp16=False, # specify bf16=True instead when training on GPUs that support bf16
+    
+    # -------------------------
+    # Precision
+    # -------------------------
+    bf16=True,
+    bf16_full_eval=True,
+    tf32=True,
+    # fp16=True, # specify bf16=True instead when training on GPUs that support bf16
     
     # -------------------------
     # Evaluation
@@ -103,8 +108,8 @@ training_args = SFTConfig(
     logging_steps=1,
     log_level="info",
     logging_strategy="steps",
-    load_best_model_at_end=True,
-    metric_for_best_model="wer",
+    # load_best_model_at_end=True,
+    # metric_for_best_model="wer",
     
     
     # push_to_hub=True,
@@ -116,7 +121,7 @@ training_args = SFTConfig(
     save_total_limit=None,
 
     # Sequence handling
-    max_length=NotImplemented, 
+    max_length=None, 
     group_by_length=True,
     packing=False,
 
@@ -131,7 +136,7 @@ training_args = SFTConfig(
 
 
 # %%
-# based on config
+# ======================= peft configuration =======================
 peft_config = LoraConfig(
         r=64,
         lora_alpha=16,
@@ -141,6 +146,9 @@ peft_config = LoraConfig(
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
 )
 # %%
+# ======================= configure the model for sft =======================
+
+model = model.to("cuda")
 trainer = SFTTrainer(
         model=model_name,
         args=training_args,
@@ -150,4 +158,34 @@ trainer = SFTTrainer(
         peft_config=peft_config,
         
     )
+# %%
+# params check
+for n, p in model.named_parameters():
+    if p.requires_grad:
+        print("First trainable param:", n, p.shape)
+        break
+
+# model.print_trainable_parameters()
+# %%
+#%%
+# ======================= COMPILE THE MODEL =======================
+if torch.__version__ >= "2.0.0":
+    print("\n" + "="*70)
+    print("🚀 Compiling model with torch.compile...")
+    print("This will take 2-3 minutes on first training step, then speeds up!")
+    print("="*70 + "\n")
+    
+    # Compile the trainer's model (not the original model variable)
+    trainer.model = torch.compile(trainer.model, mode="reduce-overhead")
+    
+    print("✅ Model wrapped for compilation!\n")
+else:
+    print("⚠️  PyTorch version < 2.0. Skipping torch.compile (consider upgrading)")
+
+# %%
+#=========================== 8. TRAINING ====================================
+#============================================================================
+# Train the model
+
+trainer.train()
 # %%
