@@ -181,7 +181,7 @@ print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_pa
 # ============================================================================
 
 # instantiate custom data collator to handle dynamic padding
-import dynamic_padding_util
+import archive.dynamic_padding_util as dynamic_padding_util
 data_collator = dynamic_padding_util.DataCollatorForCompletionOnlyLM(tokenizer=tokenizer)
 
 output_dir = "./model_logs"
