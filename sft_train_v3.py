@@ -45,6 +45,7 @@ print(tokenizer.pad_token_id)
 
 #%%
 print((str(device)))
+
 # %%
 # ========================== Load the saved model ==========================
 model_name = "model_aae1"
@@ -52,8 +53,8 @@ model = AutoModelForCausalLM.from_pretrained(
     model_name,
     device_map='auto',
     trust_remote_code=True,
-    # attn_implementation="flash_attention_2",
-    attn_implementation="sdpa",  # Use PyTorch's scaled_dot_product_attention
+    attn_implementation="flash_attention_2",
+    # attn_implementation="sdpa",  # Use PyTorch's scaled_dot_product_attention
     dtype=torch.bfloat16,          # Full bf16 precision
 )
 
@@ -68,17 +69,40 @@ print(f"Model dtype: {model.dtype}")
 output_dir = 'model_logs'
 
 training_args = SFTConfig(
+   
+   # -------------------------
+    # Output and Logging
+    # -------------------------
     output_dir=output_dir,
     overwrite_output_dir=True,
+    report_to=["tensorboard", "none"],          # optional: "wandb" if you prefer
+    logging_dir=f"{output_dir}/logs",
+    logging_steps=1,
+    logging_strategy="steps",
 
+    # -------------------------
+    # Batch Sizes - Optimized for H200
+    # -------------------------
     per_device_eval_batch_size=4, # originally set to 8
     per_device_train_batch_size=4, # originally set to 8
     gradient_accumulation_steps=2,
-    learning_rate=2.0e-05,
-    lr_scheduler_type="cosine",
+
+    # -------------------------
+    # Training Regime
+    # -------------------------
     max_steps=-1,
     num_train_epochs=1,
 
+    # -------------------------
+    # Optimization
+    # -------------------------
+    learning_rate=2.0e-05,
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.03,
+    # warmup_steps=100,
+    weight_decay=0.01,
+    max_grad_norm=1.0,
+    optim="adamw_torch_fused",
 
     # -------------------------
     # Memory Optimizations
@@ -89,40 +113,33 @@ training_args = SFTConfig(
     # activation_offloading=True,  
     # activation_offloading_params={"device": "cpu"},
 
-
-    
     # -------------------------
     # Precision
     # -------------------------
-    # bf16=True,
-    # bf16_full_eval=True,
-    # tf32=True,
+    bf16=True,
+    bf16_full_eval=True,
+    tf32=True,
     
-    # fp16=True, # specify bf16=True instead when training on GPUs that support bf16
+    fp16=False, # specify bf16=True instead when training on GPUs that support bf16
     
     # -------------------------
     # Evaluation
     # -------------------------
     do_eval=True,
-    eval_strategy="steps",
-    save_steps=1000,
-    eval_steps=1000,
-
-
-    logging_steps=1,
-    log_level="info",
-    logging_strategy="steps",
-    # load_best_model_at_end=True,
-    # metric_for_best_model="wer",
+    eval_strategy="epoch",
+    save_strategy="epoch",
+    save_total_limit=2,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    greater_is_better=False,
     
     
     # push_to_hub=True,
     # hub_model_id="zephyr-7b-sft-lora",
     # hub_strategy="every_save",
-    report_to="tensorboard",
+    
     dataset_text_field="text",
-    # save_strategy="no",
-    save_total_limit=None,
+    
 
     # Sequence handling
     max_length=None, 
@@ -135,7 +152,14 @@ training_args = SFTConfig(
     seed=42,
     data_seed=42,
 
-    
+    # -------------------------
+    # Performance
+    # -------------------------
+    dataloader_num_workers=8,
+    dataloader_pin_memory=True,
+    dataloader_prefetch_factor=2,
+    log_level="info",
+    disable_tqdm=False,
 )
 
 
@@ -149,9 +173,9 @@ peft_config = LoraConfig(
         task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
 )
+
 # %%
 # ======================= configure the model for sft =======================
-
 model = model.to(device)
 trainer = SFTTrainer(
         model=model,
