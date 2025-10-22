@@ -1,6 +1,6 @@
 
 #%%
-# ---------------------- 0 Load dataset and tokenizer----------------------
+# ========================== Load dataset and tokenizer ==========================
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTTrainer, SFTConfig
 from datasets import load_from_disk
@@ -12,6 +12,8 @@ from typing import List, Dict
 
 
 #%%
+# ========================== Set the device  ============================
+
 if torch.cuda.is_available():
         device = torch.device('cuda')
         print(f"Using CUDA: {torch.cuda.get_device_name(0)}")
@@ -23,7 +25,7 @@ else:
     print("Using CPU")
 
 #%%
-# ----------------------1️⃣ Load dataset and tokenizer----------------------
+# ========================== Load dataset and tokenizer==========================
 
 train_dataset = load_from_disk("./ultrachat_train_formatted").select(range(1000))
 eval_dataset = load_from_disk("./ultrachat_eval_formatted").select(range(500))
@@ -41,9 +43,10 @@ print(tokenizer.bos_token_id, tokenizer.bos_token)
 print(tokenizer.eos_token_id)
 print(tokenizer.pad_token_id)
 
-
+#%%
+print((str(device)))
 # %%
-# ----------------------1️⃣ Load the saved model ----------------------
+# ========================== Load the saved model ==========================
 model_name = "model_aae1"
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
@@ -61,7 +64,7 @@ model.gradient_checkpointing_enable()
 print(f"Model dtype: {model.dtype}")
     
 # %%
-# ----------------------1️⃣ Set SFTCofig parameters ----------------------
+# ========================== Set SFTCofig parameters ==========================
 output_dir = 'model_logs'
 
 training_args = SFTConfig(
@@ -91,9 +94,10 @@ training_args = SFTConfig(
     # -------------------------
     # Precision
     # -------------------------
-    bf16=True,
-    bf16_full_eval=True,
-    tf32=True,
+    # bf16=True,
+    # bf16_full_eval=True,
+    # tf32=True,
+    
     # fp16=True, # specify bf16=True instead when training on GPUs that support bf16
     
     # -------------------------
@@ -115,7 +119,7 @@ training_args = SFTConfig(
     # push_to_hub=True,
     # hub_model_id="zephyr-7b-sft-lora",
     # hub_strategy="every_save",
-    # report_to="tensorboard",
+    report_to="tensorboard",
     dataset_text_field="text",
     # save_strategy="no",
     save_total_limit=None,
@@ -136,7 +140,7 @@ training_args = SFTConfig(
 
 
 # %%
-# ======================= peft configuration =======================
+# ============================ peft configuration ==========================
 peft_config = LoraConfig(
         r=64,
         lora_alpha=16,
@@ -148,9 +152,9 @@ peft_config = LoraConfig(
 # %%
 # ======================= configure the model for sft =======================
 
-model = model.to("cuda")
+model = model.to(device)
 trainer = SFTTrainer(
-        model=model_name,
+        model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
@@ -166,9 +170,9 @@ for n, p in model.named_parameters():
         break
 
 # model.print_trainable_parameters()
-# %%
+
 #%%
-# ======================= COMPILE THE MODEL =======================
+# ========================= Compile the model ==================================
 if torch.__version__ >= "2.0.0":
     print("\n" + "="*70)
     print("🚀 Compiling model with torch.compile...")
@@ -182,9 +186,22 @@ if torch.__version__ >= "2.0.0":
 else:
     print("⚠️  PyTorch version < 2.0. Skipping torch.compile (consider upgrading)")
 
+#%%
+# ============ Sanity check: tokenizer and model alignment ====================
+print("Tokenizer vocab size:", len(tokenizer))
+print("Model embedding size:", model.get_input_embeddings().weight.shape[0])
+
+# Verify special tokens are recognized
+for tok in ["<|pad|>", "<|user|>", "<|assistant|>", "<|system|>"]:
+    tok_id = tokenizer.convert_tokens_to_ids(tok)
+    print(f"{tok}: ID={tok_id}")
+    assert tok_id < model.get_input_embeddings().weight.shape[0], "❌ Token ID out of range!"
+print("✅ Model and tokenizer are fully aligned!")
+
+
+
 # %%
 #=========================== 8. TRAINING ====================================
-#============================================================================
 # Train the model
 
 trainer.train()
