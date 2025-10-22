@@ -27,8 +27,8 @@ else:
 #%%
 # ========================== Load dataset and tokenizer==========================
 
-train_dataset = load_from_disk("./ultrachat_train_formatted").select(range(1000))
-eval_dataset = load_from_disk("./ultrachat_eval_formatted").select(range(500))
+train_dataset = load_from_disk("./ultrachat_train_formatted").select(range(10000))
+eval_dataset = load_from_disk("./ultrachat_eval_formatted").select(range(200))
 
 
 tokenizer = AutoTokenizer.from_pretrained("tokenizer_aae1", use_fast=True)
@@ -43,6 +43,8 @@ print(tokenizer.bos_token_id, tokenizer.bos_token)
 print(tokenizer.eos_token_id)
 print(tokenizer.pad_token_id)
 
+print(train_dataset[0])
+
 #%%
 print((str(device)))
 
@@ -52,10 +54,12 @@ print((str(device)))
 # set the attention implementation based on whether gpu is available
 
 if torch.cuda.is_available():
-    attention_type = "flash_attention_2",
+    attention_type = "flash_attention_2"
 else:
     attention_type = "sdpa"
+
 model_name = "model_aae1"
+
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     device_map='auto',
@@ -63,7 +67,6 @@ model = AutoModelForCausalLM.from_pretrained(
     attn_implementation=attention_type,
     dtype=torch.bfloat16,          # Full bf16 precision
 )
-
 
 # Enable gradient checkpointing for memory efficiency
 model.gradient_checkpointing_enable()
@@ -87,8 +90,6 @@ else:
     fp16_check=False
     report_to_check=None
 
-print(fp16_check)
-
 training_args = SFTConfig(
    
    # -------------------------
@@ -96,19 +97,19 @@ training_args = SFTConfig(
     # -------------------------
     output_dir=output_dir,
     overwrite_output_dir=True,
-    report_to=[],          # enable TensorBoard only
+    report_to=report_to_check,          # enable TensorBoard only
     logging_dir=f"{output_dir}/logs",
     logging_strategy="steps",
-    logging_steps=10,                   # print every 10 steps (adjust as desired)
+    logging_steps=1,                   # print every 10 steps (adjust as desired)
     log_level="info",
     disable_tqdm=False, 
 
     # -------------------------
     # Batch Sizes - Optimized for H200
     # -------------------------
-    per_device_eval_batch_size=4, # originally set to 8
-    per_device_train_batch_size=4, # originally set to 8
-    gradient_accumulation_steps=2,
+    per_device_train_batch_size=16, # originally set to 8
+    per_device_eval_batch_size=16, # originally set to 8
+    gradient_accumulation_steps=4,
 
     # -------------------------
     # Training Regime
@@ -119,10 +120,15 @@ training_args = SFTConfig(
     # -------------------------
     # Optimization
     # -------------------------
-    learning_rate=2.0e-05,
-    lr_scheduler_type="cosine",
-    warmup_ratio=0.03,
+    learning_rate=2.0e-04,
+    # lr_scheduler_type="cosine",
+    warmup_ratio=0.1,
     # warmup_steps=100,
+
+    lr_scheduler_type="linear",   # cosine is too aggressive for tiny datasets
+    warmup_steps=20,              # a few steps of warmup
+    # max_steps=-1,
+
     weight_decay=0.01,
     max_grad_norm=1.0,
     optim="adamw_torch_fused",
@@ -130,8 +136,8 @@ training_args = SFTConfig(
     # -------------------------
     # Memory Optimizations
     # -------------------------
-    gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"use_reentrant": False},  # more stable
+    gradient_checkpointing=False,
+    # gradient_checkpointing_kwargs={"use_reentrant": False},  # more stable
     # Optional: activation offloading if needed
     # activation_offloading=True,  
     # activation_offloading_params={"device": "cpu"},
@@ -184,8 +190,6 @@ training_args = SFTConfig(
     dataloader_prefetch_factor=2,
 )
 
-#%%
-training_args.fp16
 
 # %%
 # ============================ peft configuration ==========================
@@ -195,8 +199,72 @@ peft_config = LoraConfig(
         lora_dropout=0.1,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=[                     # All linear layers in Mistral
+        "q_proj",    # Query projection
+        "k_proj",    # Key projection  
+        "v_proj",    # Value projection
+        "o_proj",    # Output projection
+        # "gate_proj", # MLP gate
+        # "up_proj",   # MLP up
+        # "down_proj", # MLP down
+    ],
+    # Note: Not targeting embedding layers as they're already trainable after resize
 )
+
+model = get_peft_model(model, peft_config)
+model.print_trainable_parameters()  # verify LoRA params are trainable
+#%%
+# =========================== Create logging utility =============================
+
+from transformers import TrainerCallback
+
+
+# === Custom Callback ===
+from collections import deque
+from transformers import TrainerCallback
+
+class MovingAverageLossCallback(TrainerCallback):
+    
+    """
+    Prints running loss, moving average, and learning rate to terminal
+    for every `logging_interval` steps. Works with TRL SFTTrainer.
+    """
+    def __init__(self, logging_interval=1, moving_average_window=50):
+        self.logging_interval = logging_interval
+        self.moving_window = deque(maxlen=moving_average_window)
+        self.running_loss = 0.0
+        self.steps = 0
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None:
+            return
+        if "loss" in logs:
+            loss = logs["loss"]
+            self.running_loss += loss
+            self.steps += 1
+            self.moving_window.append(loss)
+
+            if state.global_step % self.logging_interval == 0:
+                running_avg = self.running_loss / self.steps
+                moving_avg = sum(self.moving_window) / len(self.moving_window)
+
+                # Extract LR from optimizer
+                optimizer = kwargs.get("optimizer") or getattr(kwargs.get("model"), "optimizer", None)
+                if optimizer and hasattr(optimizer, "param_groups"):
+                    lr = optimizer.param_groups[0]["lr"]
+                    lr_str = f", LR: {lr:.2e}"
+                else:
+                    lr_str = ""
+
+                print(f"[Step {state.global_step}] Running Loss Avg: {running_avg:.4f}, "
+                      f"Moving Loss Avg: {moving_avg:.4f}{lr_str}")
+
+                self.running_loss = 0.0
+                self.steps = 0
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        if metrics and "eval_loss" in metrics:
+            print(f"[Step {state.global_step}] Validation Loss: {metrics['eval_loss']:.4f}")
 
 # %%
 # ======================= configure the model for sft =======================
@@ -208,14 +276,8 @@ trainer = SFTTrainer(
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
-        
+        callbacks=[MovingAverageLossCallback()],
     )
-# %%
-# params check
-for n, p in model.named_parameters():
-    if p.requires_grad:
-        print("First trainable param:", n, p.shape)
-        break
 
 # model.print_trainable_parameters()
 
@@ -247,41 +309,12 @@ for tok in ["<|pad|>", "<|user|>", "<|assistant|>", "<|system|>"]:
 print("✅ Model and tokenizer are fully aligned!")
 
 
-#%%
-# =========================== Create logging utility =============================
-
-from transformers import TrainerCallback
-
-class LossLoggingCallback(TrainerCallback):
-    def __init__(self):
-        super().__init__()
-        self.train_loss = 0.0
-        self.train_steps = 0
-
-    def on_step_end(self, args, state, control, **kwargs):
-        """Called at the end of each training step"""
-        logs = kwargs.get("logs", {})
-        loss = logs.get("loss")
-        if loss is not None:
-            self.train_loss += loss
-            self.train_steps += 1
-
-        if self.train_steps > 0 and state.global_step % args.logging_steps == 0:
-            avg_loss = self.train_loss / self.train_steps
-            print(f"[Step {state.global_step}] Training Loss: {avg_loss:.4f}")
-            self.train_loss = 0.0
-            self.train_steps = 0
-
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        """Called at each evaluation step"""
-        if metrics and "eval_loss" in metrics:
-            print(f"[Step {state.global_step}] Validation Loss: {metrics['eval_loss']:.4f}")
-
-trainer.add_callback(LossLoggingCallback())
-
 # %%
 # =========================== 8. TRAINING ====================================
 # Train the model
 
 trainer.train()
+# %%
+encoded = tokenizer(train_dataset[0]["text"])
+print(tokenizer.convert_ids_to_tokens(encoded["input_ids"][-10:]))
 # %%
