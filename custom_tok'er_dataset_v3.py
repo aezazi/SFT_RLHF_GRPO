@@ -251,11 +251,10 @@ print(test_load_dataset.column_names)
 print(type(test_load_dataset))
 pprint.pprint((test_load_dataset['text'][1]))
 
-#%%
-
-
 
 #%%
+import numpy as np
+
 lengths = [len(example['input_ids']) for example in test_load_dataset]
 print(f"Mean length: {np.mean(lengths):.0f}")
 print(f"Median length: {np.median(lengths):.0f}")
