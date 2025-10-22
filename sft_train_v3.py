@@ -48,13 +48,19 @@ print((str(device)))
 
 # %%
 # ========================== Load the saved model ==========================
+
+# set the attention implementation based on whether gpu is available
+
+if torch.cuda.is_available():
+    attention_type = "flash_attention_2",
+else:
+    attention_type = "sdpa"
 model_name = "model_aae1"
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     device_map='auto',
     trust_remote_code=True,
-    attn_implementation="flash_attention_2",
-    # attn_implementation="sdpa",  # Use PyTorch's scaled_dot_product_attention
+    attn_implementation=attention_type,
     dtype=torch.bfloat16,          # Full bf16 precision
 )
 
@@ -68,6 +74,21 @@ print(f"Model dtype: {model.dtype}")
 # ========================== Set SFTCofig parameters ==========================
 output_dir = 'model_logs'
 
+if torch.cuda.is_available():
+    bf16_check=True
+    bf16_full_eval_check=True
+    tf32_check=True
+    fp16_check=False
+    report_to_check="tensorboard"
+else:
+    bf16_check=False
+    bf16_full_eval_check=False
+    tf32_check=False
+    fp16_check=False
+    report_to_check=None
+
+print(fp16_check)
+
 training_args = SFTConfig(
    
    # -------------------------
@@ -75,10 +96,12 @@ training_args = SFTConfig(
     # -------------------------
     output_dir=output_dir,
     overwrite_output_dir=True,
-    report_to=["tensorboard", "none"],          # optional: "wandb" if you prefer
+    report_to=[],          # enable TensorBoard only
     logging_dir=f"{output_dir}/logs",
-    logging_steps=1,
     logging_strategy="steps",
+    logging_steps=10,                   # print every 10 steps (adjust as desired)
+    log_level="info",
+    disable_tqdm=False, 
 
     # -------------------------
     # Batch Sizes - Optimized for H200
@@ -116,18 +139,19 @@ training_args = SFTConfig(
     # -------------------------
     # Precision
     # -------------------------
-    bf16=True,
-    bf16_full_eval=True,
-    tf32=True,
-    
-    fp16=False, # specify bf16=True instead when training on GPUs that support bf16
+    bf16=bf16_check,
+    bf16_full_eval=bf16_full_eval_check,
+    tf32=tf32_check,
+    fp16=fp16_check, # specify bf16=True instead when training on GPUs that support bf16
     
     # -------------------------
     # Evaluation
     # -------------------------
     do_eval=True,
-    eval_strategy="epoch",
-    save_strategy="epoch",
+    eval_strategy="steps",       # evaluate every N steps
+    eval_steps=500,               # <-- run evaluation every 50 steps (adjust to your dataset)
+    save_strategy="steps",       # save model when evaluation runs
+    save_steps=500,               # save every 50 steps too (aligned with eval)
     save_total_limit=2,
     load_best_model_at_end=True,
     metric_for_best_model="eval_loss",
@@ -158,10 +182,10 @@ training_args = SFTConfig(
     dataloader_num_workers=8,
     dataloader_pin_memory=True,
     dataloader_prefetch_factor=2,
-    log_level="info",
-    disable_tqdm=False,
 )
 
+#%%
+training_args.fp16
 
 # %%
 # ============================ peft configuration ==========================
@@ -223,9 +247,40 @@ for tok in ["<|pad|>", "<|user|>", "<|assistant|>", "<|system|>"]:
 print("✅ Model and tokenizer are fully aligned!")
 
 
+#%%
+# =========================== Create logging utility =============================
+
+from transformers import TrainerCallback
+
+class LossLoggingCallback(TrainerCallback):
+    def __init__(self):
+        super().__init__()
+        self.train_loss = 0.0
+        self.train_steps = 0
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Called at the end of each training step"""
+        logs = kwargs.get("logs", {})
+        loss = logs.get("loss")
+        if loss is not None:
+            self.train_loss += loss
+            self.train_steps += 1
+
+        if self.train_steps > 0 and state.global_step % args.logging_steps == 0:
+            avg_loss = self.train_loss / self.train_steps
+            print(f"[Step {state.global_step}] Training Loss: {avg_loss:.4f}")
+            self.train_loss = 0.0
+            self.train_steps = 0
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        """Called at each evaluation step"""
+        if metrics and "eval_loss" in metrics:
+            print(f"[Step {state.global_step}] Validation Loss: {metrics['eval_loss']:.4f}")
+
+trainer.add_callback(LossLoggingCallback())
 
 # %%
-#=========================== 8. TRAINING ====================================
+# =========================== 8. TRAINING ====================================
 # Train the model
 
 trainer.train()
