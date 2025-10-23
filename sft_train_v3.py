@@ -47,6 +47,7 @@ print(train_dataset[0])
 
 #%%
 print((str(device)))
+print(torch.cuda.is_available())
 
 # %%
 # ========================== Load the saved model ==========================
@@ -107,9 +108,9 @@ training_args = SFTConfig(
     # -------------------------
     # Batch Sizes - Optimized for H200
     # -------------------------
-    per_device_train_batch_size=16, # originally set to 8
-    per_device_eval_batch_size=16, # originally set to 8
-    gradient_accumulation_steps=4,
+    per_device_train_batch_size=8, # originally set to 8
+    per_device_eval_batch_size=8, # originally set to 8
+    gradient_accumulation_steps=1,
 
     # -------------------------
     # Training Regime
@@ -213,6 +214,13 @@ peft_config = LoraConfig(
 
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()  # verify LoRA params are trainable
+
+#%%
+for n, p in model.named_parameters():
+    if p.requires_grad:
+        print(n, p.device, p.dtype)
+print('-'*60)
+
 #%%
 # =========================== Create logging utility =============================
 
@@ -266,9 +274,11 @@ class MovingAverageLossCallback(TrainerCallback):
         if metrics and "eval_loss" in metrics:
             print(f"[Step {state.global_step}] Validation Loss: {metrics['eval_loss']:.4f}")
 
+
+
 # %%
 # ======================= configure the model for sft =======================
-model = model.to(device)
+# model = model.to(device)
 trainer = SFTTrainer(
         model=model,
         args=training_args,
