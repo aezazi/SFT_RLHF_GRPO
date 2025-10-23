@@ -27,7 +27,7 @@ else:
 # ========================== Load dataset and tokenizer==========================
 
 train_dataset = load_from_disk("./ultrachat_train_formatted").select(range(10000))
-eval_dataset = load_from_disk("./ultrachat_eval_formatted").select(range(200))
+eval_dataset = load_from_disk("./ultrachat_eval_formatted").select(range(1000))
 
 
 tokenizer = AutoTokenizer.from_pretrained("tokenizer_aae1", use_fast=True)
@@ -75,8 +75,10 @@ print(f"Model dtype: {model.dtype}")
     
 # %%
 # ========================== Set SFTCofig parameters ==========================
+# specify output directory for logging
 output_dir = 'model_logs'
 
+# set some SFTConfig params based on if cuda is available
 if torch.cuda.is_available():
     bf16_check=True
     bf16_full_eval_check=True
@@ -111,23 +113,23 @@ training_args = SFTConfig(
     per_device_eval_batch_size=8, # originally set to 8
     gradient_accumulation_steps=1,
 
+   
     # -------------------------
-    # Training Regime
-    # -------------------------
-    max_steps=50,
-    num_train_epochs=1,
-
-    # -------------------------
-    # Optimization
+    # Optimization and training
     # -------------------------
     learning_rate=2.0e-04,
-    # lr_scheduler_type="cosine",
-    warmup_ratio=0.1,
-    # warmup_steps=100,
+    
+    # for bug fixing
+    # lr_scheduler_type="linear",   
+    # max_steps=50,
+    # warmup_steps=5,
 
-    lr_scheduler_type="linear",   # cosine is too aggressive for tiny datasets
-    warmup_steps=20,              # a few steps of warmup
-    # max_steps=-1,
+    # for more extended training
+    lr_scheduler_type="cosine",
+    max_steps = -1,
+    warmup_ratio=0.1,
+    
+    num_train_epochs=1,
 
     weight_decay=0.01,
     max_grad_norm=1.0,
@@ -155,9 +157,9 @@ training_args = SFTConfig(
     # -------------------------
     do_eval=True,
     eval_strategy="steps",       # evaluate every N steps
-    eval_steps=500,               # <-- run evaluation every 50 steps (adjust to your dataset)
+    eval_steps=500,               
     save_strategy="steps",       # save model when evaluation runs
-    save_steps=500,               # save every 50 steps too (aligned with eval)
+    save_steps=500,              
     save_total_limit=2,
     load_best_model_at_end=True,
     metric_for_best_model="eval_loss",
@@ -211,10 +213,6 @@ peft_config = LoraConfig(
     # Note: Not targeting embedding layers as they're already trainable after resize
 )
 
-# model = get_peft_model(model, peft_config)
-# model.get_input_embeddings().weight.requires_grad = True
-
-# model.print_trainable_parameters()  # verify LoRA params are trainable
 
 
 #%%
@@ -306,7 +304,7 @@ trainer = SFTTrainer(
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        peft_config=peft_config, # commenting out since peft is manually applied to the model above
+        peft_config=peft_config,
         callbacks=[MovingAverageLossCallback()],
     )
 
@@ -340,6 +338,10 @@ trainer = SFTTrainer(
 
 # print(f"Trainable parameter count: {sum(p.numel() for p in trainable_params):,}")
 # print(f"Total parameter count: {sum(p.numel() for p in opt_params):,}")
+
+#%%
+import pprint
+pprint.pprint(trainer.train_dataset[2]['text'])
 
 #%%
 # ========================= Compile the model ==================================
