@@ -109,8 +109,8 @@ training_args = SFTConfig(
     # -------------------------
     # Batch Sizes - Optimized for H200
     # -------------------------
-    per_device_train_batch_size=8, # originally set to 8
-    per_device_eval_batch_size=8, # originally set to 8
+    per_device_train_batch_size=16, # originally set to 8
+    per_device_eval_batch_size=16, # originally set to 8
     gradient_accumulation_steps=1,
 
    
@@ -157,11 +157,11 @@ training_args = SFTConfig(
     # -------------------------
     do_eval=True,
     eval_strategy="steps",       # evaluate every N steps
-    eval_steps=500,               
+    eval_steps=50,               
     save_strategy="steps",       # save model when evaluation runs
     save_steps=500,              
     save_total_limit=2,
-    load_best_model_at_end=True,
+    load_best_model_at_end=False,
     metric_for_best_model="eval_loss",
     greater_is_better=False,
     
@@ -187,7 +187,7 @@ training_args = SFTConfig(
     # -------------------------
     # Performance
     # -------------------------
-    dataloader_num_workers=8,
+    dataloader_num_workers=2,
     dataloader_pin_memory=True,
     dataloader_prefetch_factor=2,
 )
@@ -206,13 +206,12 @@ peft_config = LoraConfig(
         "k_proj",    # Key projection  
         "v_proj",    # Value projection
         "o_proj",    # Output projection
-        # "gate_proj", # MLP gate
-        # "up_proj",   # MLP up
-        # "down_proj", # MLP down
+        "gate_proj", # MLP gate
+        "up_proj",   # MLP up
+        "down_proj", # MLP down
     ],
     # Note: Not targeting embedding layers as they're already trainable after resize
 )
-
 
 
 #%%
@@ -236,64 +235,6 @@ from transformers import TrainerCallback
 from collections import deque
 from transformers import TrainerCallback
 
-class MovingAverageLossCallback(TrainerCallback):
-    """
-    Logs running/moving loss, learning rate, and gradient norm for LoRA parameters.
-    """
-
-            # def __init__(self, logging_interval=10, moving_average_window=50):
-            #     self.logging_interval = logging_interval
-            #     self.moving_window = deque(maxlen=moving_average_window)
-            #     self.running_loss = 0.0
-            #     self.steps = 0
-            #     self.last_grad_norm = 0.0
-            #     self.last_grad_count = 0
-
-            # def _get_lora_grad_norm(self, model):
-            #     """Compute total grad norm across LoRA parameters only."""
-            #     total_norm = 0.0
-            #     count = 0
-            #     for n, p in model.named_parameters():
-            #         if p.requires_grad and "lora" in n and p.grad is not None:
-            #             param_norm = p.grad.data.norm(2)
-            #             total_norm += param_norm.item() ** 2
-            #             count += 1
-            #     return (total_norm ** 0.5, count)
-
-            # def on_step_end(self, args, state, control, model=None, **kwargs):
-            #     """Capture gradients BEFORE optimizer clears them."""
-            #     if model is not None:
-            #         self.last_grad_norm, self.last_grad_count = self._get_lora_grad_norm(model)
-
-            # def on_log(self, args, state, control, logs=None, model=None, optimizer=None, **kwargs):
-            #     if logs is None or "loss" not in logs:
-            #         return
-
-            #     loss = logs["loss"]
-            #     self.running_loss += loss
-            #     self.steps += 1
-            #     self.moving_window.append(loss)
-
-            #     if state.global_step % self.logging_interval == 0:
-            #         running_avg = self.running_loss / self.steps
-            #         moving_avg = sum(self.moving_window) / len(self.moving_window)
-            #         self.running_loss = 0.0
-            #         self.steps = 0
-
-            #         # Get LR
-            #         lr = optimizer.param_groups[0]["lr"] if optimizer else None
-
-            #         print(f"[Step {state.global_step}] "
-            #               f"Loss: {loss:.4f}, "
-            #               f"Running Avg: {running_avg:.4f}, "
-            #               f"Moving Avg: {moving_avg:.4f}, "
-            #               f"LoRA Grad Norm: {self.last_grad_norm:.3f} ({self.last_grad_count} params), "
-            #               f"LR: {lr:.2e}")
-
-            # def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-            #     if metrics and "eval_loss" in metrics:
-            #         print(f"\n[Eval @ Step {state.global_step}] Eval Loss: {metrics['eval_loss']:.4f}\n")
-
 # Simplified callback for just loss tracking
 class SimpleLossCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
@@ -311,41 +252,10 @@ trainer = SFTTrainer(
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
-        callbacks=[MovingAverageLossCallback()],
-        peft_config=peft_config, # commenting out since peft is manually applied to the model above
-        callbacks=[SimpleLossCallbackk()],
+        # callbacks=[MovingAverageLossCallback()],
+        callbacks=[SimpleLossCallback()],
     )
 
-
-# #%%
-# # Put model in train mode just to be explicit
-# model.train()
-
-# # Check whether parameters require gradients
-# requires_grad_list = [(n, p.requires_grad) for n, p in model.named_parameters()]
-
-# # Print summary
-# frozen = [n for n, g in requires_grad_list if not g]
-# trainable = [n for n, g in requires_grad_list if g]
-
-# print(f"Total parameters: {len(requires_grad_list)}")
-# print(f"Trainable: {len(trainable)} | Frozen: {len(frozen)}")
-
-# # Optionally show examples of frozen params if any
-# if frozen:
-#     print("Frozen parameters (first 10):")
-#     for name in frozen[:10]:
-#         print(f"  {name}")
-# else:
-#     print("✅ All parameters are trainable.")
-
-# #%%
-# # Inside or right after trainer = SFTTrainer(...)
-# opt_params = list(trainer.model.parameters())
-# trainable_params = [p for p in opt_params if p.requires_grad]
-
-# print(f"Trainable parameter count: {sum(p.numel() for p in trainable_params):,}")
-# print(f"Total parameter count: {sum(p.numel() for p in opt_params):,}")
 
 #%%
 import pprint
