@@ -26,9 +26,11 @@ else:
 #%%
 # ========================== Load dataset and tokenizer==========================
 
-train_dataset = load_from_disk("./ultrachat_train_formatted").select(range(10000))
-eval_dataset = load_from_disk("./ultrachat_eval_formatted").select(range(1000))
+train_dataset = load_from_disk("./ultrachat_train_formatted")
+eval_dataset = load_from_disk("./ultrachat_eval_formatted").select(range(10000))
 
+print(len(train_dataset))
+print(len(eval_dataset))
 
 tokenizer = AutoTokenizer.from_pretrained("tokenizer_aae1", use_fast=True)
 print(train_dataset.column_names)
@@ -157,10 +159,10 @@ training_args = SFTConfig(
     # -------------------------
     do_eval=True,
     eval_strategy="steps",       # evaluate every N steps
-    eval_steps=50,               
+    eval_steps=500,               
     save_strategy="steps",       # save model when evaluation runs
-    save_steps=500,              
-    save_total_limit=2,
+    save_steps=1000,              
+    save_total_limit=3,
     load_best_model_at_end=False,
     metric_for_best_model="eval_loss",
     greater_is_better=False,
@@ -236,15 +238,27 @@ from collections import deque
 from transformers import TrainerCallback
 
 # Simplified callback for just loss tracking
-class SimpleLossCallback(TrainerCallback):
+class SimpleStepCallback(TrainerCallback):
+    """Print loss at user-defined intervals."""
+    
+    def __init__(self, logging_steps=10):
+        """
+        Args:
+            logging_steps (int): Log every N steps. Default is 10.
+        """
+        self.logging_steps = logging_steps
+    
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs and "loss" in logs:
-            print(f"[Step {state.global_step}] Loss: {logs['loss']:.4f}")
+            # Only log at the defined interval
+            if state.global_step % self.logging_steps == 0:
+                step = state.global_step
+                loss = logs["loss"]
+                lr = logs.get("learning_rate", 0)
+                print(f"Step {step:4d} | Loss: {loss:.4f} | LR: {lr:.2e}")
 
 # %%
 # ======================= configure the model for sft =======================
-
-
 trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -252,12 +266,11 @@ trainer = SFTTrainer(
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
-        # callbacks=[MovingAverageLossCallback()],
-        callbacks=[SimpleLossCallback()],
+        callbacks=[SimpleStepCallback(logging_steps=10)],
     )
 
-
 #%%
+# ======================= check trainer formatting and special tokens =======================
 import pprint
 pprint.pprint(trainer.train_dataset[2]['text'])
 
@@ -290,7 +303,7 @@ print("✅ Model and tokenizer are fully aligned!")
 
 
 # %%
-# =========================== 8. TRAINING ====================================
+# ==================== Check Lora parameters are present ===================
 # Right before trainer.train()
 print("\n=== LoRA Parameter Check ===")
 lora_params = [(n, p.requires_grad, p.shape) for n, p in trainer.model.named_parameters() if 'lora' in n]
@@ -303,42 +316,45 @@ else:
     print("⚠️ WARNING: No LoRA parameters found!")
 
 #%%
-# BEFORE trainer.train()
-print("\n=== Capturing LoRA params BEFORE training ===")
-lora_params_before = {}
-for n, p in trainer.model.named_parameters():
-    if 'lora' in n and p.requires_grad:
-        lora_params_before[n] = p.detach().clone()
+# # BEFORE trainer.train()
+# print("\n=== Capturing LoRA params BEFORE training ===")
+# lora_params_before = {}
+# for n, p in trainer.model.named_parameters():
+#     if 'lora' in n and p.requires_grad:
+#         lora_params_before[n] = p.detach().clone()
 
-example_param_name = list(lora_params_before.keys())[0]
-print(f"Example param: {example_param_name}")
-print(f"First 5 values: {lora_params_before[example_param_name].flatten()[:5]}")
+# example_param_name = list(lora_params_before.keys())[0]
+# print(f"Example param: {example_param_name}")
+# print(f"First 5 values: {lora_params_before[example_param_name].flatten()[:5]}")
 
 #%%
+# =========================== Start training ====================================
 trainer.train()
 
 
 #%%
 # AFTER trainer.train()
-print("\n=== Checking LoRA params AFTER training ===")
-params_changed = 0
-params_unchanged = 0
+# print("\n=== Checking LoRA params AFTER training ===")
+# params_changed = 0
+# params_unchanged = 0
 
-for n, p in trainer.model.named_parameters():
-    if 'lora' in n and p.requires_grad and n in lora_params_before:
-        before = lora_params_before[n]
-        after = p.detach()
+# for n, p in trainer.model.named_parameters():
+#     if 'lora' in n and p.requires_grad and n in lora_params_before:
+#         before = lora_params_before[n]
+#         after = p.detach()
         
-        if not torch.allclose(before, after, rtol=1e-5):
-            params_changed += 1
-        else:
-            params_unchanged += 1
+#         if not torch.allclose(before, after, rtol=1e-5):
+#             params_changed += 1
+#         else:
+#             params_unchanged += 1
 
-print(f"Parameters that CHANGED: {params_changed}")
-print(f"Parameters UNCHANGED: {params_unchanged}")
+# print(f"Parameters that CHANGED: {params_changed}")
+# print(f"Parameters UNCHANGED: {params_unchanged}")
 
-# Show example
-print(f"\nExample param: {example_param_name}")
-print(f"Before: {lora_params_before[example_param_name].flatten()[:5]}")
-print(f"After:  {trainer.model.state_dict()[example_param_name].flatten()[:5]}")
+# # Show example
+# print(f"\nExample param: {example_param_name}")
+# print(f"Before: {lora_params_before[example_param_name].flatten()[:5]}")
+# print(f"After:  {trainer.model.state_dict()[example_param_name].flatten()[:5]}")
+
 # %%
+
