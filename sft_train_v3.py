@@ -115,7 +115,7 @@ training_args = SFTConfig(
     # -------------------------
     # Training Regime
     # -------------------------
-    max_steps=-1,
+    max_steps=50,
     num_train_epochs=1,
 
     # -------------------------
@@ -195,9 +195,9 @@ training_args = SFTConfig(
 # %%
 # ============================ peft configuration ==========================
 peft_config = LoraConfig(
-        r=64,
+        r=16,
         lora_alpha=16,
-        lora_dropout=0.1,
+        lora_dropout=0.05,
         bias="none",
         task_type="CAUSAL_LM",
         target_modules=[                     # All linear layers in Mistral
@@ -215,70 +215,91 @@ peft_config = LoraConfig(
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()  # verify LoRA params are trainable
 
+
 #%%
+# Match dtype of model (if loaded with bf16)
+dtype = next(model.parameters()).dtype
 for n, p in model.named_parameters():
     if p.requires_grad:
-        print(n, p.device, p.dtype)
-print('-'*60)
+        p.data = p.data.to(dtype)
+
+print("Model dtype:", next(model.parameters()).dtype)
+trainable_dtypes = {p.dtype for n, p in model.named_parameters() if p.requires_grad}
+print("Trainable dtypes:", trainable_dtypes)
+
 
 #%%
 # =========================== Create logging utility =============================
 
 from transformers import TrainerCallback
 
-
 # === Custom Callback ===
 from collections import deque
 from transformers import TrainerCallback
 
 class MovingAverageLossCallback(TrainerCallback):
-    
     """
-    Prints running loss, moving average, and learning rate to terminal
-    for every `logging_interval` steps. Works with TRL SFTTrainer.
+    Logs running/moving loss, learning rate, and gradient norm for LoRA parameters.
+    Only considers trainable LoRA parameters for grad norm.
     """
-    def __init__(self, logging_interval=1, moving_average_window=50):
+
+    def __init__(self, logging_interval=10, moving_average_window=50):
         self.logging_interval = logging_interval
         self.moving_window = deque(maxlen=moving_average_window)
         self.running_loss = 0.0
         self.steps = 0
 
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs is None:
+    def _get_lora_grad_norm(self, model):
+        """Compute total grad norm across LoRA parameters only."""
+        total_norm = 0.0
+        count = 0
+        for n, p in model.named_parameters():
+            if p.requires_grad and "lora" in n and p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                total_norm += param_norm.item() ** 2
+                count += 1
+        return (total_norm ** 0.5, count)
+
+    def on_log(self, args, state, control, logs=None, model=None, optimizer=None, **kwargs):
+        if logs is None or "loss" not in logs:
             return
-        if "loss" in logs:
-            loss = logs["loss"]
-            self.running_loss += loss
-            self.steps += 1
-            self.moving_window.append(loss)
 
-            if state.global_step % self.logging_interval == 0:
-                running_avg = self.running_loss / self.steps
-                moving_avg = sum(self.moving_window) / len(self.moving_window)
+        loss = logs["loss"]
+        self.running_loss += loss
+        self.steps += 1
+        self.moving_window.append(loss)
 
-                # Extract LR from optimizer
-                optimizer = kwargs.get("optimizer") or getattr(kwargs.get("model"), "optimizer", None)
-                if optimizer and hasattr(optimizer, "param_groups"):
-                    lr = optimizer.param_groups[0]["lr"]
-                    lr_str = f", LR: {lr:.2e}"
-                else:
-                    lr_str = ""
+        if state.global_step % self.logging_interval == 0:
+            running_avg = self.running_loss / self.steps
+            moving_avg = sum(self.moving_window) / len(self.moving_window)
+            self.running_loss = 0.0
+            self.steps = 0
 
-                print(f"[Step {state.global_step}] Running Loss Avg: {running_avg:.4f}, "
-                      f"Moving Loss Avg: {moving_avg:.4f}{lr_str}")
+            # Get LR
+            lr = optimizer.param_groups[0]["lr"] if optimizer else None
 
-                self.running_loss = 0.0
-                self.steps = 0
+            # Compute LoRA gradient norm
+            grad_norm, grad_count = self._get_lora_grad_norm(model)
+
+            print(f"[Step {state.global_step}] "
+                  f"Loss: {loss:.4f}, "
+                  f"Running Avg: {running_avg:.4f}, "
+                  f"Moving Avg: {moving_avg:.4f}, "
+                  f"LoRA Grad Norm: {grad_norm:.3f} ({grad_count} params), "
+                  f"LR: {lr:.2e}")
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if metrics and "eval_loss" in metrics:
-            print(f"[Step {state.global_step}] Validation Loss: {metrics['eval_loss']:.4f}")
-
-
+            print(f"\n[Eval @ Step {state.global_step}] Eval Loss: {metrics['eval_loss']:.4f}\n")
 
 # %%
 # ======================= configure the model for sft =======================
 # model = model.to(device)
+
+
+from transformers import DataCollatorForSeq2Seq
+
+
 trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -289,7 +310,36 @@ trainer = SFTTrainer(
         callbacks=[MovingAverageLossCallback()],
     )
 
-# model.print_trainable_parameters()
+
+# #%%
+# # Put model in train mode just to be explicit
+# model.train()
+
+# # Check whether parameters require gradients
+# requires_grad_list = [(n, p.requires_grad) for n, p in model.named_parameters()]
+
+# # Print summary
+# frozen = [n for n, g in requires_grad_list if not g]
+# trainable = [n for n, g in requires_grad_list if g]
+
+# print(f"Total parameters: {len(requires_grad_list)}")
+# print(f"Trainable: {len(trainable)} | Frozen: {len(frozen)}")
+
+# # Optionally show examples of frozen params if any
+# if frozen:
+#     print("Frozen parameters (first 10):")
+#     for name in frozen[:10]:
+#         print(f"  {name}")
+# else:
+#     print("✅ All parameters are trainable.")
+
+# #%%
+# # Inside or right after trainer = SFTTrainer(...)
+# opt_params = list(trainer.model.parameters())
+# trainable_params = [p for p in opt_params if p.requires_grad]
+
+# print(f"Trainable parameter count: {sum(p.numel() for p in trainable_params):,}")
+# print(f"Total parameter count: {sum(p.numel() for p in opt_params):,}")
 
 #%%
 # ========================= Compile the model ==================================
@@ -322,8 +372,26 @@ print("✅ Model and tokenizer are fully aligned!")
 # %%
 # =========================== 8. TRAINING ====================================
 # Train the model
+# Grab all LoRA trainable parameters
+lora_params = {n: p.detach().clone() for n, p in trainer.model.named_parameters() if p.requires_grad and "lora" in n}
 
+print("Example LoRA parameter before training:")
+example_name = list(lora_params.keys())[0]
+print(example_name, lora_params[example_name][0, :5])  # print first 5 elements
+
+#%%
 trainer.train()
+
+
+#%%
+updated_lora_params = {n: p.detach().clone() for n, p in trainer.model.named_parameters() if p.requires_grad and "lora" in n}
+
+# Check if weights changed
+for n in lora_params:
+    if torch.allclose(lora_params[n], updated_lora_params[n]):
+        print(f"❌ {n} did NOT change!")
+    else:
+        print(f"✅ {n} updated correctly.")
 # %%
 encoded = tokenizer(train_dataset[0]["text"])
 print(tokenizer.convert_ids_to_tokens(encoded["input_ids"][-10:]))
