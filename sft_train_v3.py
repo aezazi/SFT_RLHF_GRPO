@@ -10,7 +10,6 @@ from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 from dataclasses import dataclass
 from typing import List, Dict
 
-
 #%%
 # ========================== Set the device  ============================
 
@@ -137,7 +136,7 @@ training_args = SFTConfig(
     # -------------------------
     # Memory Optimizations
     # -------------------------
-    gradient_checkpointing=False,
+    gradient_checkpointing=True,
     # gradient_checkpointing_kwargs={"use_reentrant": False},  # more stable
     # Optional: activation offloading if needed
     # activation_offloading=True,  
@@ -212,10 +211,10 @@ peft_config = LoraConfig(
     # Note: Not targeting embedding layers as they're already trainable after resize
 )
 
-model = get_peft_model(model, peft_config)
+# model = get_peft_model(model, peft_config)
 # model.get_input_embeddings().weight.requires_grad = True
 
-model.print_trainable_parameters()  # verify LoRA params are trainable
+# model.print_trainable_parameters()  # verify LoRA params are trainable
 
 
 #%%
@@ -242,7 +241,6 @@ from transformers import TrainerCallback
 class MovingAverageLossCallback(TrainerCallback):
     """
     Logs running/moving loss, learning rate, and gradient norm for LoRA parameters.
-    Only considers trainable LoRA parameters for grad norm.
     """
 
     def __init__(self, logging_interval=10, moving_average_window=50):
@@ -250,6 +248,8 @@ class MovingAverageLossCallback(TrainerCallback):
         self.moving_window = deque(maxlen=moving_average_window)
         self.running_loss = 0.0
         self.steps = 0
+        self.last_grad_norm = 0.0
+        self.last_grad_count = 0
 
     def _get_lora_grad_norm(self, model):
         """Compute total grad norm across LoRA parameters only."""
@@ -261,6 +261,11 @@ class MovingAverageLossCallback(TrainerCallback):
                 total_norm += param_norm.item() ** 2
                 count += 1
         return (total_norm ** 0.5, count)
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        """Capture gradients BEFORE optimizer clears them."""
+        if model is not None:
+            self.last_grad_norm, self.last_grad_count = self._get_lora_grad_norm(model)
 
     def on_log(self, args, state, control, logs=None, model=None, optimizer=None, **kwargs):
         if logs is None or "loss" not in logs:
@@ -280,14 +285,11 @@ class MovingAverageLossCallback(TrainerCallback):
             # Get LR
             lr = optimizer.param_groups[0]["lr"] if optimizer else None
 
-            # Compute LoRA gradient norm
-            grad_norm, grad_count = self._get_lora_grad_norm(model)
-
             print(f"[Step {state.global_step}] "
                   f"Loss: {loss:.4f}, "
                   f"Running Avg: {running_avg:.4f}, "
                   f"Moving Avg: {moving_avg:.4f}, "
-                  f"LoRA Grad Norm: {grad_norm:.3f} ({grad_count} params), "
+                  f"LoRA Grad Norm: {self.last_grad_norm:.3f} ({self.last_grad_count} params), "
                   f"LR: {lr:.2e}")
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
@@ -304,7 +306,7 @@ trainer = SFTTrainer(
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        # peft_config=peft_config, # commenting out since peft is manually applied to the model above
+        peft_config=peft_config, # commenting out since peft is manually applied to the model above
         callbacks=[MovingAverageLossCallback()],
     )
 
@@ -369,28 +371,54 @@ print("✅ Model and tokenizer are fully aligned!")
 
 # %%
 # =========================== 8. TRAINING ====================================
-# Train the model
-# Grab all LoRA trainable parameters
-lora_params = {n: p.detach().clone() for n, p in trainer.model.named_parameters() if p.requires_grad and "lora" in n}
+# Right before trainer.train()
+print("\n=== LoRA Parameter Check ===")
+lora_params = [(n, p.requires_grad, p.shape) for n, p in trainer.model.named_parameters() if 'lora' in n]
+print(f"Total LoRA parameters found: {len(lora_params)}")
+if lora_params:
+    print("First 5 LoRA parameters:")
+    for n, req_grad, shape in lora_params[:5]:
+        print(f"  {n}: requires_grad={req_grad}, shape={shape}")
+else:
+    print("⚠️ WARNING: No LoRA parameters found!")
 
-print("Example LoRA parameter before training:")
-example_name = list(lora_params.keys())[0]
-print(example_name, lora_params[example_name][0, :5])  # print first 5 elements
+#%%
+# BEFORE trainer.train()
+print("\n=== Capturing LoRA params BEFORE training ===")
+lora_params_before = {}
+for n, p in trainer.model.named_parameters():
+    if 'lora' in n and p.requires_grad:
+        lora_params_before[n] = p.detach().clone()
+
+example_param_name = list(lora_params_before.keys())[0]
+print(f"Example param: {example_param_name}")
+print(f"First 5 values: {lora_params_before[example_param_name].flatten()[:5]}")
 
 #%%
 trainer.train()
 
 
 #%%
-updated_lora_params = {n: p.detach().clone() for n, p in trainer.model.named_parameters() if p.requires_grad and "lora" in n}
+# AFTER trainer.train()
+print("\n=== Checking LoRA params AFTER training ===")
+params_changed = 0
+params_unchanged = 0
 
-# Check if weights changed
-for n in lora_params:
-    if torch.allclose(lora_params[n], updated_lora_params[n]):
-        print(f"❌ {n} did NOT change!")
-    else:
-        print(f"✅ {n} updated correctly.")
-# %%
-encoded = tokenizer(train_dataset[0]["text"])
-print(tokenizer.convert_ids_to_tokens(encoded["input_ids"][-10:]))
+for n, p in trainer.model.named_parameters():
+    if 'lora' in n and p.requires_grad and n in lora_params_before:
+        before = lora_params_before[n]
+        after = p.detach()
+        
+        if not torch.allclose(before, after, rtol=1e-5):
+            params_changed += 1
+        else:
+            params_unchanged += 1
+
+print(f"Parameters that CHANGED: {params_changed}")
+print(f"Parameters UNCHANGED: {params_unchanged}")
+
+# Show example
+print(f"\nExample param: {example_param_name}")
+print(f"Before: {lora_params_before[example_param_name].flatten()[:5]}")
+print(f"After:  {trainer.model.state_dict()[example_param_name].flatten()[:5]}")
 # %%
