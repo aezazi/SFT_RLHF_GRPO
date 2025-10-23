@@ -70,7 +70,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 # Enable gradient checkpointing for memory efficiency
-model.gradient_checkpointing_enable()
+# model.gradient_checkpointing_enable()
 
 print(f"Model dtype: {model.dtype}")
     
@@ -213,6 +213,8 @@ peft_config = LoraConfig(
 )
 
 model = get_peft_model(model, peft_config)
+# model.get_input_embeddings().weight.requires_grad = True
+
 model.print_trainable_parameters()  # verify LoRA params are trainable
 
 
@@ -294,10 +296,6 @@ class MovingAverageLossCallback(TrainerCallback):
 
 # %%
 # ======================= configure the model for sft =======================
-# model = model.to(device)
-
-
-from transformers import DataCollatorForSeq2Seq
 
 
 trainer = SFTTrainer(
@@ -306,7 +304,7 @@ trainer = SFTTrainer(
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        peft_config=peft_config,
+        # peft_config=peft_config, # commenting out since peft is manually applied to the model above
         callbacks=[MovingAverageLossCallback()],
     )
 
