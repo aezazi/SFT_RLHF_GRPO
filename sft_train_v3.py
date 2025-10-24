@@ -104,7 +104,7 @@ training_args = SFTConfig(
     report_to=report_to_check,          # enable TensorBoard only
     logging_dir=f"{output_dir}/logs",
     logging_strategy="steps",
-    logging_steps=1,                   # print every 10 steps (adjust as desired)
+    logging_steps=10,                   # print every 10 steps (adjust as desired)
     log_level="info",
     disable_tqdm=False, 
 
@@ -167,7 +167,6 @@ training_args = SFTConfig(
     metric_for_best_model="eval_loss",
     greater_is_better=False,
     
-    
     # push_to_hub=True,
     # hub_model_id="zephyr-7b-sft-lora",
     # hub_strategy="every_save",
@@ -176,7 +175,7 @@ training_args = SFTConfig(
     
 
     # Sequence handling
-    max_length=None, 
+    max_length=4096, 
     group_by_length=True,
     packing=False,
 
@@ -189,7 +188,7 @@ training_args = SFTConfig(
     # -------------------------
     # Performance
     # -------------------------
-    dataloader_num_workers=2,
+    dataloader_num_workers=8,
     dataloader_pin_memory=True,
     dataloader_prefetch_factor=2,
 )
@@ -236,26 +235,36 @@ from transformers import TrainerCallback
 # === Custom Callback ===
 from collections import deque
 from transformers import TrainerCallback
+import csv
+from datetime import datetime
 
 # Simplified callback for just loss tracking
 class SimpleStepCallback(TrainerCallback):
-    """Print loss at user-defined intervals."""
+    """Log to CSV file at user-defined intervals."""
     
-    def __init__(self, logging_steps=10):
-        """
-        Args:
-            logging_steps (int): Log every N steps. Default is 10.
-        """
+    def __init__(self, logging_steps=10, log_file="training_progress.csv"):
         self.logging_steps = logging_steps
+        self.log_file = log_file
+        self.start_time = datetime.now()
+        
+        # Create CSV file with header
+        with open(self.log_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Step', 'Loss', 'Learning_Rate', 'Elapsed_Time_Minutes'])
     
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs and "loss" in logs:
-            # Only log at the defined interval
-            if state.global_step % self.logging_steps == 0:
-                step = state.global_step
-                loss = logs["loss"]
-                lr = logs.get("learning_rate", 0)
-                print(f"Step {step:4d} | Loss: {loss:.4f} | LR: {lr:.2e}")
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % self.logging_steps == 0:
+            if state.log_history:
+                last_log = state.log_history[-1]
+                loss = last_log.get('loss', None)
+                lr = last_log.get('learning_rate', None)
+                
+                if loss is not None:
+                    elapsed = (datetime.now() - self.start_time).total_seconds() / 60
+                    
+                    with open(self.log_file, 'a', newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow([state.global_step, loss, lr if lr else 0, round(elapsed, 2)])
 
 # %%
 # ======================= configure the model for sft =======================
@@ -266,7 +275,7 @@ trainer = SFTTrainer(
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
-        callbacks=[SimpleStepCallback(logging_steps=10)],
+        callbacks=[SimpleStepCallback()],
     )
 
 #%%
@@ -276,18 +285,20 @@ pprint.pprint(trainer.train_dataset[2]['text'])
 
 #%%
 # ========================= Compile the model ==================================
-if torch.__version__ >= "2.0.0":
-    print("\n" + "="*70)
-    print("🚀 Compiling model with torch.compile...")
-    print("This will take 2-3 minutes on first training step, then speeds up!")
-    print("="*70 + "\n")
+# if torch.__version__ >= "2.0.0":
+#     print("\n" + "="*70)
+#     print("🚀 Compiling model with torch.compile...")
+#     print("="*70 + "\n")
     
-    # Compile the trainer's model (not the original model variable)
-    trainer.model = torch.compile(trainer.model, mode="reduce-overhead")
+#     # Suppress the repetitive CUDA Graph warnings
+#     import os
+#     os.environ['TORCHDYNAMO_VERBOSE'] = '0'
     
-    print("✅ Model wrapped for compilation!\n")
-else:
-    print("⚠️  PyTorch version < 2.0. Skipping torch.compile (consider upgrading)")
+#     trainer.model = torch.compile(trainer.model, mode="reduce-overhead")
+    
+#     print("✅ Model wrapped for compilation!\n")
+# else:
+#     print("⚠️  PyTorch version < 2.0. Skipping torch.compile (consider upgrading)")
 
 #%%
 # ============ Sanity check: tokenizer and model alignment ====================
@@ -315,54 +326,51 @@ if lora_params:
 else:
     print("⚠️ WARNING: No LoRA parameters found!")
 
-#%%
-# # BEFORE trainer.train()
-# print("\n=== Capturing LoRA params BEFORE training ===")
-# lora_params_before = {}
-# for n, p in trainer.model.named_parameters():
-#     if 'lora' in n and p.requires_grad:
-#         lora_params_before[n] = p.detach().clone()
-
-# example_param_name = list(lora_params_before.keys())[0]
-# print(f"Example param: {example_param_name}")
-# print(f"First 5 values: {lora_params_before[example_param_name].flatten()[:5]}")
 
 #%%
 # =========================== Start training ====================================
-trainer.train()
+trainer.train(resume_from_checkpoint="model_logs/checkpoint-2000")
 
 
-#%%
-# AFTER trainer.train()
-# print("\n=== Checking LoRA params AFTER training ===")
-# params_changed = 0
-# params_unchanged = 0
-
-# for n, p in trainer.model.named_parameters():
-#     if 'lora' in n and p.requires_grad and n in lora_params_before:
-#         before = lora_params_before[n]
-#         after = p.detach()
-        
-#         if not torch.allclose(before, after, rtol=1e-5):
-#             params_changed += 1
-#         else:
-#             params_unchanged += 1
-
-# print(f"Parameters that CHANGED: {params_changed}")
-# print(f"Parameters UNCHANGED: {params_unchanged}")
-
-# # Show example
-# print(f"\nExample param: {example_param_name}")
-# print(f"Before: {lora_params_before[example_param_name].flatten()[:5]}")
-# print(f"After:  {trainer.model.state_dict()[example_param_name].flatten()[:5]}")
 
 # %%
-
-# After creating the trainer, before calling trainer.train()
-from torch.utils.data import DataLoader
-
+# the code below is not part of training. It's a check to see if the trainer is properly inserting padding tokens
 # Get a batch from the training dataloader
-dataloader = trainer.get_train_dataloader()
-batch = next(iter(dataloader))
+# After creating the trainer, before calling trainer.train()
 
+# from torch.utils.data import DataLoader
+
+# # Get a batch from the training dataloader
+# dataloader = trainer.get_train_dataloader()
+# batch = next(iter(dataloader))
+
+# # Check the batch
+# print("=== Batch Inspection ===")
+# print(f"Batch keys: {batch.keys()}")
+# print(f"Input IDs shape: {batch['input_ids'].shape}")
+# print(f"Attention mask shape: {batch['attention_mask'].shape}")
+
+# # Check if padding token is present
+# pad_token_id = tokenizer.pad_token_id
+# print(f"\nPadding token ID: {pad_token_id}")
+
+# # Count padding tokens in first sample
+# first_sample = batch['input_ids'][0]
+# num_pad_tokens = (first_sample == pad_token_id).sum().item()
+# total_tokens = len(first_sample)
+# print(f"Sample 0: {num_pad_tokens}/{total_tokens} tokens are padding ({num_pad_tokens/total_tokens*100:.1f}%)")
+
+# # Show where padding starts in first sample
+# print(f"\nFirst sample input_ids (last 20 tokens):")
+# print(first_sample[-20:])
+# print(f"Attention mask (last 20):")
+# print(batch['attention_mask'][0][-20:])
+
+# # Check all samples in batch
+# print(f"\n=== Padding Statistics for Batch ===")
+# for i in range(len(batch['input_ids'])):
+#     sample = batch['input_ids'][i]
+#     num_pads = (sample == pad_token_id).sum().item()
+#     seq_len = len(sample)
+#     print(f"Sample {i}: Length={seq_len}, Padding={num_pads} ({num_pads/seq_len*100:.1f}%)")
 # %%

@@ -255,7 +255,7 @@ pprint.pprint((test_load_dataset['text'][1]))
 #%%
 import numpy as np
 
-lengths = [len(example['input_ids']) for example in test_load_dataset]
+lengths = [len(example['text']) for example in test_load_dataset]
 print(f"Mean length: {np.mean(lengths):.0f}")
 print(f"Median length: {np.median(lengths):.0f}")
 print(f"95th percentile: {np.percentile(lengths, 95):.0f}")
