@@ -95,8 +95,8 @@ else:
     report_to_check=None
 
 training_args = SFTConfig(
-   
-   # -------------------------
+    
+    # -------------------------
     # Output and Logging
     # -------------------------
     output_dir=output_dir,
@@ -358,3 +358,11 @@ trainer.train()
 
 # %%
 
+# After creating the trainer, before calling trainer.train()
+from torch.utils.data import DataLoader
+
+# Get a batch from the training dataloader
+dataloader = trainer.get_train_dataloader()
+batch = next(iter(dataloader))
+
+# %%
